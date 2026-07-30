@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GuardiaSync — CeiboMed</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #eef0f3; min-height: 100vh; color: #111827; }
+textarea, input, select { font-family: inherit; outline: none; }
+button { font-family: inherit; cursor: pointer; }
+@keyframes fade { from { opacity:0; transform:translateY(4px) } to { opacity:1; transform:none } }
+
+/* HEADER */
+.header { background: #0f172a; height: 52px; padding: 0 22px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+.header-logo { display: flex; align-items: center; gap: 14px; }
+.header-title { font-family: Georgia, serif; font-size: 1.2rem; color: white; }
+.header-title span { color: #60a5fa; }
+.header-sep { width: 1px; height: 18px; background: rgba(255,255,255,0.15); }
+.header-suite { font-size: 0.68rem; color: rgba(255,255,255,0.35); letter-spacing: 1.5px; text-transform: uppercase; }
+.badge-alerta { background: #b91c1c; color: white; font-size: 0.72rem; font-weight: 700; padding: 3px 10px; border-radius: 4px; }
+
+/* NAV */
+.nav { background: #fff; border-bottom: 1px solid #d1d5db; display: flex; }
+.nav-btn { display: flex; align-items: center; gap: 6px; padding: 9px 20px; border: none; border-bottom: 2px solid transparent; background: transparent; color: #6b7280; font-size: 0.81rem; font-weight: 400; cursor: pointer; transition: all 0.15s; }
+.nav-btn.active { color: #1d4ed8; border-bottom-color: #1d4ed8; font-weight: 600; }
+
+/* MAIN */
+.main { padding: 18px 22px; max-width: 1060px; margin: 0 auto; animation: fade 0.2s ease; }
+
+/* TOOLBAR */
+.toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; flex-wrap: wrap; gap: 8px; }
+.toolbar-left { display: flex; align-items: center; gap: 8px; }
+.toolbar-right { display: flex; gap: 8px; align-items: center; }
+.mes-titulo { font-family: Georgia, serif; font-size: 1.2rem; font-weight: 600; color: #111827; min-width: 160px; }
+
+/* BOTONES */
+.btn { display: inline-flex; align-items: center; gap: 5px; padding: 8px 16px; border-radius: 6px; font-size: 0.82rem; font-weight: 600; border: none; transition: all 0.15s; cursor: pointer; }
+.btn-primary { background: #1d4ed8; color: white; }
+.btn-primary:hover { background: #1e40af; }
+.btn-secondary { background: #fff; color: #374151; border: 1px solid #d1d5db; }
+.btn-secondary:hover { background: #f9fafb; }
+.btn-danger { background: #b91c1c; color: white; }
+.btn-ghost { background: transparent; color: #1d4ed8; border: 1px solid #eff6ff; }
+.btn-sm { padding: 4px 11px; font-size: 0.74rem; }
+.btn-full { width: 100%; justify-content: center; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* NOTA MES */
+.nota-mes-wrap { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+.nota-mes-display { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #fefce8; border: 1px solid #fde047; border-radius: 6px; cursor: pointer; flex: 1; }
+.nota-mes-edit { display: flex; align-items: center; gap: 8px; flex: 1; }
+.nota-mes-edit input { flex: 1; padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.83rem; }
+
+/* PANEL NOTAS DEL MES */
+.notas-panel { background: #fff; border: 1px solid #d1d5db; border-radius: 10px; padding: 14px 16px; margin-top: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.06); }
+.notas-panel-title { font-family: Georgia, serif; font-size: 1rem; color: #111827; margin-bottom: 10px; }
+.notas-panel textarea { width: 100%; min-height: 100px; padding: 10px 12px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 0.85rem; color: #374151; resize: vertical; line-height: 1.5; background: #fefdf9; }
+.notas-panel textarea:focus { border-color: #1d4ed8; }
+
+/* LEYENDA */
+.leyenda { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+.leyenda-grupo { display: flex; align-items: center; gap: 4px; }
+.leyenda-label { font-size: 0.65rem; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-right: 2px; }
+.leyenda-item { display: flex; align-items: center; gap: 3px; padding: 2px 8px; border-radius: 4px; }
+.leyenda-dot { width: 7px; height: 7px; border-radius: 2px; display: inline-block; flex-shrink: 0; }
+.leyenda-sep { width: 1px; height: 14px; background: #d1d5db; margin: 0 4px; }
+
+/* FILTRO MÉDICO */
+.filtro-select { padding: 5px 9px; border: 1px solid #d1d5db; border-radius: 5px; font-size: 0.77rem; background: #fff; color: #374151; }
+
+/* CALENDARIO GRILLA */
+.cal-wrap { background: #fff; border-radius: 10px; border: 1px solid #d1d5db; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.12); }
+.cal-header { display: grid; grid-template-columns: repeat(7, 1fr); background: #0f172a; }
+.cal-dow { padding: 8px 0; text-align: center; font-size: 0.7rem; font-weight: 700; color: rgba(255,255,255,0.45); letter-spacing: 1px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); }
+.cal-cell { min-height: 110px; border-right: 1px solid #d1d5db; border-bottom: 1px solid #d1d5db; background: #fff; cursor: pointer; position: relative; transition: background 0.12s; }
+.cal-cell:hover { background: #f0f4f8 !important; }
+.cal-cell.vacio { background: #f8f9fa; cursor: default; }
+.cal-cell.vacio:hover { background: #f8f9fa !important; }
+.cal-cell.finde { background: #fafafa; }
+.cal-cell.hoy { background: #f0f7ff; }
+.cal-cell.sin-cubrir { background: #fff5f5; }
+
+/* NÚMERO DÍA */
+.cal-num-wrap { padding: 5px 7px; display: flex; justify-content: space-between; align-items: flex-start; }
+.cal-num { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.78rem; font-weight: 500; color: #374151; }
+.cal-num.hoy { background: #1d4ed8; color: white; font-weight: 700; }
+.cal-num.finde { color: #6b7280; }
+.cal-flags { display: flex; gap: 4px; }
+
+/* ASIGNACIONES EN CELDA — CAMBIO 3: menos color */
+.cal-asigs { padding: 0 5px 5px; display: flex; flex-direction: column; gap: 1px; }
+.asig-row { padding: 2px 4px; border-radius: 2px; }
+/* Guardia: borde neutro gris, sin color individual del médico */
+.asig-row.guardia { border-left: 2px solid #94a3b8; background: transparent; }
+/* Apoyo: mantiene color del rol */
+.asig-row.apoyo { border-left: 2px solid var(--rol-color); background: var(--rol-bg); }
+.asig-rol-label { font-size: 0.56rem; font-weight: 700; line-height: 1.2; }
+/* CAMBIO 2: nombre + horario en gris neutro para guardias */
+.asig-nombre { font-size: 0.62rem; font-weight: 700; line-height: 1.3; color: #1e293b; }
+.asig-nombre .horario { font-weight: 400; color: #6b7280; margin-left: 3px; }
+.asig-nombre.apoyo-nombre { font-weight: 600; }
+.asig-sin-cubrir { padding: 2px 4px; border-radius: 2px; border-left: 2px solid #b91c1c; background: #fef2f2; }
+
+/* FOOTER */
+.footer { margin-top: 18px; font-size: 0.68rem; color: #6b7280; text-align: center; }
+
+/* EQUIPO */
+.equipo-header { display: grid; grid-template-columns: auto 2fr 2fr 1fr auto; background: #0f172a; }
+.equipo-th { padding: 8px 14px; font-size: 0.67rem; font-weight: 700; color: rgba(255,255,255,0.45); letter-spacing: 1px; text-transform: uppercase; }
+.equipo-row { display: grid; grid-template-columns: auto 2fr 2fr 1fr auto; border-top: 1px solid #d1d5db; align-items: center; }
+.equipo-row:nth-child(even) { background: #fafafa; }
+.equipo-td { padding: 10px 14px; }
+.avatar { border-radius: 3px; display: flex; align-items: center; justify-content: center; font-weight: 700; color: white; flex-shrink: 0; }
+
+/* ESTADÍSTICAS */
+.stats-header { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr; background: #0f172a; }
+.stats-th { padding: 9px 16px; font-size: 0.67rem; font-weight: 700; color: rgba(255,255,255,0.45); letter-spacing: 1px; text-transform: uppercase; }
+.stats-row { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr; border-top: 1px solid #d1d5db; align-items: center; }
+.stats-row:nth-child(even) { background: #fafafa; }
+.stats-td { padding: 10px 16px; }
+
+/* MODAL BASE */
+.modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.modal-box { background: #fff; border-radius: 14px; padding: 24px; width: 100%; box-shadow: 0 4px 24px rgba(0,0,0,0.18); max-height: 90vh; overflow-y: auto; }
+
+/* MODAL DÍA */
+.modal-dia { max-width: 460px; }
+.modal-dia-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.modal-dia-asig { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; margin-bottom: 6px; }
+.modal-dia-asig-info { flex: 1; }
+
+/* MODAL COPIAR */
+.modal-copiar { max-width: 420px; }
+.modal-preview { background: #eef0f3; border-radius: 8px; padding: 12px 14px; margin-bottom: 20px; border: 1px solid #d1d5db; }
+
+/* MODAL MÉDICO */
+.modal-medico { max-width: 340px; }
+.color-swatch { width: 24px; height: 24px; border-radius: 4px; cursor: pointer; transition: all 0.12s; }
+
+/* SECTION */
+.section-title { font-family: Georgia, serif; font-size: 1.1rem; color: #111827; margin-bottom: 16px; }
+.card-wrap { background: #fff; border: 1px solid #d1d5db; border-radius: 10px; overflow: hidden; }
+
+/* FORM ELEMENTS */
+.form-label { font-size: 0.72rem; font-weight: 600; color: #6b7280; margin-bottom: 4px; }
+.form-input { width: 100%; padding: 7px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.82rem; background: #fff; }
+.form-select { width: 100%; padding: 7px 9px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.82rem; background: #fff; color: #374151; }
+.form-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+
+@media (max-width: 640px) {
+  .main { padding: 12px 10px; }
+  .cal-cell { min-height: 80px; }
+  .asig-nombre { font-size: 0.55rem; }
+}
+</style>
+</head>
+<body>
+
+<!-- ─── LOGIN (CAMBIO 4) ─────────────────────────────────────── -->
+<div id="login" style="position:fixed;inset:0;z-index:500;background:#0f172a;display:flex;align-items:center;justify-content:center;padding:20px;">
+  <div style="width:100%;max-width:360px;text-align:center;animation:fade 0.3s ease;">
+    <div style="margin-bottom:26px;">
+      <div style="font-family:Georgia,serif;font-size:1.9rem;color:#fff;letter-spacing:0.5px;">Guardia<span style="color:#60a5fa;">Sync</span></div>
+      <div style="font-size:0.7rem;color:rgba(255,255,255,0.4);letter-spacing:2px;text-transform:uppercase;margin-top:6px;">CeiboMed</div>
+      <div style="font-size:0.9rem;color:rgba(255,255,255,0.65);margin-top:14px;">Guardia-Emergencia</div>
+    </div>
+    <input id="login-pass" type="password" placeholder="Contraseña"
+      onkeydown="if(event.key==='Enter')intentarLogin()"
+      oninput="document.getElementById('login-error').style.display='none'"
+      style="width:100%;padding:11px 14px;border:1px solid rgba(255,255,255,0.15);border-radius:8px;background:#1e293b;color:#fff;font-size:0.9rem;margin-bottom:10px;text-align:center;">
+    <button onclick="intentarLogin()"
+      style="width:100%;padding:11px 14px;border:none;border-radius:8px;background:#1d4ed8;color:#fff;font-size:0.9rem;font-weight:600;cursor:pointer;">Ingresar</button>
+    <div id="login-error" style="display:none;color:#f87171;font-size:0.8rem;margin-top:12px;">Contraseña incorrecta</div>
+  </div>
+</div>
+
+<div id="app"></div>
+
+<script>
+// ─── DATOS ───────────────────────────────────────────────────
+
+const C = {
+  bg:"#eef0f3", surface:"#ffffff", ink:"#111827",
+  soft:"#374151", muted:"#6b7280", border:"#d1d5db",
+  night:"#0f172a", accent:"#1d4ed8", accentLt:"#eff6ff",
+  red:"#b91c1c", redLt:"#fef2f2",
+  green:"#15803d", greenLt:"#f0fdf4",
+  amber:"#b45309", amberLt:"#fffbeb",
+  teal:"#0e7490", tealLt:"#ecfeff",
+  purple:"#6d28d9", purpleLt:"#f5f3ff",
+};
+
+const MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+const DIAS_SEMANA = ["Dom","Lun","Mar","Mié","Jue","Vie","Sáb"];
+const DIAS_FULL = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","Sábado"];
+
+const ROLES_BASE = [
+  { id:"D12",  label:"08–20 hs",    color:"#334155", bg:"#f8fafc", desc:"Diurno 12hs",         grupo:"Guardia"  },
+  { id:"N12",  label:"20–08 hs",    color:"#334155", bg:"#f1f5f9", desc:"Nocturno 12hs",        grupo:"Guardia"  },
+  { id:"A6",   label:"Apoyo 6hs",   color:"#b91c1c", bg:"#fef2f2", desc:"Apoyo 6 horas",        grupo:"Apoyo"    },
+  { id:"A4",   label:"Apoyo 4hs",   color:"#b45309", bg:"#fffbeb", desc:"Apoyo 4 horas",        grupo:"Apoyo"    },
+  { id:"A8",   label:"Apoyo 8hs",   color:"#7c3aed", bg:"#f5f3ff", desc:"Apoyo 8 horas",        grupo:"Apoyo"    },
+  { id:"POL",  label:"Policlínica", color:"#0e7490", bg:"#ecfeff", desc:"Policlínica PA",       grupo:"Especial" },
+  { id:"INT",  label:"Interno",     color:"#6d28d9", bg:"#f5f3ff", desc:"Interno/Estudiante",   grupo:"Especial" },
+  { id:"X",    label:"Personaliz.", color:"#15803d", bg:"#f0fdf4", desc:"Rol libre",            grupo:"Otro"     },
+];
+
+// ORDEN para sorting: D12 primero, N12 segundo, resto después
+const ROL_ORDEN = { D12:0, N12:1 };
+
+let medicos = [
+  { id:1,  nombre:"Quiñones",    sigla:"QUI", color:"#1d4ed8" },
+  { id:2,  nombre:"A. Cuña",     sigla:"ACU", color:"#15803d" },
+  { id:3,  nombre:"B. Arbiza",   sigla:"ARB", color:"#7c3aed" },
+  { id:4,  nombre:"H. Pereira",  sigla:"PER", color:"#b45309" },
+  { id:5,  nombre:"Trivel",      sigla:"TRI", color:"#0e7490" },
+  { id:6,  nombre:"Panizza",     sigla:"PAN", color:"#be185d" },
+  { id:7,  nombre:"H. Colón",    sigla:"COL", color:"#374151" },
+  { id:8,  nombre:"C. Balle",    sigla:"BAL", color:"#4d7c0f" },
+  { id:9,  nombre:"Borrero",     sigla:"BOR", color:"#9a3412" },
+  { id:10, nombre:"S. Rodriguez",sigla:"ROD", color:"#1e40af" },
+  { id:11, nombre:"Ayala",       sigla:"AYA", color:"#6d28d9" },
+  { id:12, nombre:"Valor",       sigla:"VAL", color:"#065f46" },
+  { id:13, nombre:"Dos Santos",  sigla:"DOS", color:"#7f1d1d" },
+  { id:14, nombre:"E. García",   sigla:"GAR", color:"#b91c1c" },
+];
+
+// ─── ESTADO ──────────────────────────────────────────────────
+
+let state = {
+  view: "calendario",
+  anio: 2026,
+  mes: 7,
+  calendario: null,
+  notaMes: "Nahira pide el 14/8.",
+  historialMeses: {},
+  historialNotas: {},
+  filtroMedico: "",
+  modalDia: null,
+  modalCopiar: null,
+  modalMedico: false,
+  editNotaMes: false,
+  addMedico: "",
+  addRol: "D12",
+  nuevoMedico: { nombre:"", sigla:"", color:"#1d4ed8" },
+};
+
+// ─── HELPERS ─────────────────────────────────────────────────
+
+function getMedico(id) { return medicos.find(m => m.id === Number(id)); }
+function getRol(id) { return ROLES_BASE.find(r => r.id === id) || ROLES_BASE[0]; }
+
+// ─── NOTAS DEL MES (localStorage) ────────────────────────────
+function escHTML(s) {
+  return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+function notasMesKey(anio, mes) { return `guardias_notas_${anio}_${mes+1}`; }
+function cargarNotasMes() {
+  try { return localStorage.getItem(notasMesKey(state.anio, state.mes)) || ""; }
+  catch(e) { return ""; }
+}
+function guardarNotasMes(texto) {
+  try { localStorage.setItem(notasMesKey(state.anio, state.mes), texto); }
+  catch(e) {}
+}
+
+// ─── PERSISTENCIA GLOBAL (CAMBIO 1) ──────────────────────────
+function calKey(anio, mes) { return `guardias_cal_${anio}_${mes+1}`; }
+
+function guardarEstado() {
+  try {
+    if (state.calendario) {
+      localStorage.setItem(calKey(state.anio, state.mes), JSON.stringify(state.calendario));
+    }
+    localStorage.setItem("guardias_medicos", JSON.stringify(medicos));
+  } catch(e) {}
+}
+
+function cargarCalMes(anio, mes) {
+  try {
+    const raw = localStorage.getItem(calKey(anio, mes));
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    return (obj && typeof obj === "object") ? obj : null;
+  } catch(e) { return null; }
+}
+
+function cargarEstado() {
+  try {
+    const rawMed = localStorage.getItem("guardias_medicos");
+    if (rawMed) {
+      const arr = JSON.parse(rawMed);
+      if (Array.isArray(arr) && arr.length) medicos = arr;
+    }
+    const cal = cargarCalMes(state.anio, state.mes);
+    if (cal) {
+      state.calendario = cal;
+      state.historialMeses[`${state.anio}-${state.mes}`] = cal;
+    }
+  } catch(e) {}
+}
+
+function generarMesVacio(anio, mes) {
+  const cal = {};
+  const total = new Date(anio, mes+1, 0).getDate();
+  for(let d=1; d<=total; d++) {
+    const f = `${anio}-${String(mes+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    cal[f] = { asignaciones:[], notas:"" };
+  }
+  return cal;
+}
+
+function cargarAgosto2026() {
+  const cal = generarMesVacio(2026, 7);
+  const datos = {
+    "2026-08-01": [{medicoId:7,rol:"D12"},{medicoId:8,rol:"D12"}],
+    "2026-08-02": [{medicoId:9,rol:"D12"},{medicoId:2,rol:"D12"}],
+    "2026-08-03": [{medicoId:1,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:10,rol:"N12"}],
+    "2026-08-04": [{medicoId:2,rol:"D12"},{medicoId:3,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:1,rol:"N12"}],
+    "2026-08-05": [{medicoId:4,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:11,rol:"N12"}],
+    "2026-08-06": [{medicoId:5,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:13,rol:"N12"}],
+    "2026-08-07": [{medicoId:6,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:5,rol:"N12"}],
+    "2026-08-08": [{medicoId:7,rol:"D12"},{medicoId:8,rol:"D12"}],
+    "2026-08-09": [{medicoId:9,rol:"D12"},{medicoId:2,rol:"D12"}],
+    "2026-08-10": [{medicoId:1,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:10,rol:"N12"}],
+    "2026-08-11": [{medicoId:2,rol:"D12"},{medicoId:3,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:1,rol:"N12"}],
+    "2026-08-12": [{medicoId:4,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:11,rol:"N12"}],
+    "2026-08-13": [{medicoId:5,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:13,rol:"N12"}],
+    "2026-08-14": [{medicoId:6,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:5,rol:"N12"}],
+    "2026-08-15": [{medicoId:7,rol:"D12"},{medicoId:8,rol:"D12"}],
+    "2026-08-16": [{medicoId:9,rol:"D12"},{medicoId:2,rol:"D12"}],
+    "2026-08-17": [{medicoId:1,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:10,rol:"N12"}],
+    "2026-08-18": [{medicoId:2,rol:"D12"},{medicoId:3,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:12,rol:"N12"}],
+    "2026-08-19": [{medicoId:4,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:11,rol:"N12"}],
+    "2026-08-20": [{medicoId:5,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:13,rol:"N12"}],
+    "2026-08-21": [{medicoId:6,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:1,rol:"N12"}],
+    "2026-08-22": [{medicoId:7,rol:"D12"},{medicoId:8,rol:"D12"}],
+    "2026-08-23": [{medicoId:9,rol:"D12"},{medicoId:2,rol:"D12"}],
+    "2026-08-24": [{medicoId:1,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:10,rol:"N12"}],
+    "2026-08-25": [{medicoId:2,rol:"D12"},{medicoId:3,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:12,rol:"N12"}],
+    "2026-08-26": [{medicoId:4,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:11,rol:"N12"}],
+    "2026-08-27": [{medicoId:5,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:13,rol:"N12"}],
+    "2026-08-28": [{medicoId:6,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:5,rol:"N12"}],
+    "2026-08-29": [{medicoId:7,rol:"D12"},{medicoId:8,rol:"D12"}],
+    "2026-08-30": [{medicoId:9,rol:"D12"},{medicoId:2,rol:"D12"}],
+    "2026-08-31": [{medicoId:1,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:10,rol:"N12"}],
+  };
+  Object.entries(datos).forEach(([f,a]) => { if(cal[f]) cal[f].asignaciones = a; });
+  cal["2026-08-14"].notas = "Nahira pide cambio";
+  return cal;
+}
+
+state.calendario = cargarAgosto2026();
+state.historialMeses["2026-7"] = state.calendario;
+state.historialNotas["2026-7"] = state.notaMes;
+
+function diaData(fecha) {
+  return state.calendario[fecha] || {asignaciones:[], notas:""};
+}
+
+function sinCubrir() {
+  return Object.values(state.calendario).filter(d => d.asignaciones.length === 0).length;
+}
+
+function getStats() {
+  const s = {};
+  medicos.forEach(m => { s[m.id] = {total:0, D12:0, N12:0, apoyo:0}; });
+  Object.values(state.calendario).forEach(dia => {
+    dia.asignaciones.forEach(a => {
+      if(!s[a.medicoId]) return;
+      s[a.medicoId].total++;
+      if(a.rol==="D12") s[a.medicoId].D12++;
+      else if(a.rol==="N12") s[a.medicoId].N12++;
+      else s[a.medicoId].apoyo++;
+    });
+  });
+  return s;
+}
+
+// ─── ORDEN DE ASIGNACIONES (CAMBIO 1) ────────────────────────
+function ordenarAsignaciones(asigs) {
+  return [...asigs].sort((a, b) => {
+    const oa = ROL_ORDEN[a.rol] !== undefined ? ROL_ORDEN[a.rol] : 2;
+    const ob = ROL_ORDEN[b.rol] !== undefined ? ROL_ORDEN[b.rol] : 2;
+    return oa - ob;
+  });
+}
+
+// ─── RENDER ASIGNACIÓN EN CELDA (CAMBIOS 2 y 3) ──────────────
+function renderAsigCelda(a) {
+  const m = getMedico(a.medicoId);
+  const rol = getRol(a.rol);
+  if(!m) return "";
+  const esApoyo = a.rol !== "D12" && a.rol !== "N12";
+
+  if(esApoyo) {
+    // Apoyo: mantiene color del rol
+    return `<div class="asig-row apoyo" style="--rol-color:${rol.color};--rol-bg:${rol.bg};border-left-color:${rol.color};background:${rol.bg}">
+      <div class="asig-rol-label" style="color:${rol.color}">${rol.label}</div>
+      <div class="asig-nombre apoyo-nombre" style="color:${rol.color}">${m.nombre}</div>
+    </div>`;
+  } else {
+    // CAMBIO 2+3: guardia en gris neutro, con horario al lado del nombre
+    return `<div class="asig-row guardia">
+      <div class="asig-nombre">${m.nombre}<span class="horario">· ${rol.label}</span></div>
+    </div>`;
+  }
+}
+
+// ─── RENDER CELDA DÍA ────────────────────────────────────────
+function renderCeldaDia(fecha) {
+  const data = diaData(fecha);
+  const dia = Number(fecha.split("-")[2]);
+  const hoy = new Date().toISOString().split("T")[0];
+  const esHoy = fecha === hoy;
+  const esFinde = [0,6].includes(new Date(fecha).getDay());
+  const sinCubrirDia = data.asignaciones.length === 0;
+
+  const asigsFiltradas = state.filtroMedico
+    ? data.asignaciones.filter(a => String(a.medicoId) === state.filtroMedico)
+    : data.asignaciones;
+  const opacidad = state.filtroMedico && asigsFiltradas.length === 0 ? 0.4 : 1;
+
+  // CAMBIO 1: ordenar D12 primero, N12 segundo
+  const asigsOrdenadas = ordenarAsignaciones(asigsFiltradas);
+
+  let clases = "cal-cell";
+  if(esHoy) clases += " hoy";
+  else if(esFinde) clases += " finde";
+  else if(sinCubrirDia) clases += " sin-cubrir";
+
+  let numClases = "cal-num";
+  if(esHoy) numClases += " hoy";
+  else if(esFinde) numClases += " finde";
+
+  const asigHTML = asigsOrdenadas.map(renderAsigCelda).join("");
+  const sinCubrirHTML = sinCubrirDia && !state.filtroMedico
+    ? `<div class="asig-sin-cubrir"><span style="font-size:0.6rem;color:#b91c1c;font-weight:600">Sin cubrir</span></div>`
+    : "";
+
+  return `<div id="cell-${fecha}" class="${clases}" style="opacity:${opacidad}" onclick="abrirModalDia('${fecha}')">
+    <div class="cal-num-wrap">
+      <span class="${numClases}">${dia}</span>
+      <div class="cal-flags">
+        ${data.notas ? `<span style="font-size:0.55rem;color:#b45309;font-weight:700">📌</span>` : ""}
+        ${sinCubrirDia && !state.filtroMedico ? `<span style="font-size:0.58rem;color:#b91c1c;font-weight:700">!</span>` : ""}
+      </div>
+    </div>
+    <div class="cal-asigs">${asigHTML}${sinCubrirHTML}</div>
+  </div>`;
+}
+
+// ─── RENDER AVATAR ───────────────────────────────────────────
+function renderAvatar(m, size=28) {
+  return `<div class="avatar" style="width:${size}px;height:${size}px;background:${m.color};font-size:${size*0.33}px">${m.sigla.slice(0,2)}</div>`;
+}
+
+// ─── RENDER CALENDARIO ───────────────────────────────────────
+function renderCalendario() {
+  const totalDias = new Date(state.anio, state.mes+1, 0).getDate();
+  const primerDia = new Date(state.anio, state.mes, 1).getDay();
+  const sc = sinCubrir();
+
+  // Leyenda
+  const grupos = ["Guardia","Apoyo","Especial"];
+  const leyendaHTML = grupos.map(g => {
+    const roles = ROLES_BASE.filter(r => r.grupo === g);
+    return `<div class="leyenda-grupo">
+      <span class="leyenda-label">${g}:</span>
+      ${roles.map(r => `<div class="leyenda-item" style="background:${r.bg};border:1px solid ${r.color}33">
+        <span class="leyenda-dot" style="background:${r.color}"></span>
+        <span style="font-size:0.68rem;font-weight:600;color:${r.color}">${r.id} — ${r.desc}</span>
+      </div>`).join("")}
+      <span class="leyenda-sep"></span>
+    </div>`;
+  }).join("");
+
+  // Opciones filtro médico
+  const opsMedico = medicos.map(m => `<option value="${m.id}">${m.sigla} — ${m.nombre}</option>`).join("");
+
+  // Vacíos iniciales
+  const vaciosHTML = Array.from({length:primerDia}, (_,i) => `<div key="e${i}" style="min-height:110px;border-right:1px solid #d1d5db;border-bottom:1px solid #d1d5db;background:#f8f9fa"></div>`).join("");
+
+  // Días
+  let diasHTML = "";
+  for(let d=1; d<=totalDias; d++) {
+    const f = `${state.anio}-${String(state.mes+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    diasHTML += renderCeldaDia(f);
+  }
+
+  // Relleno final
+  const relleno = (7 - ((primerDia + totalDias) % 7)) % 7;
+  const rellenoHTML = Array.from({length:relleno}, (_,i) => `<div style="min-height:110px;border-right:1px solid #d1d5db;border-bottom:1px solid #d1d5db;background:#f8f9fa"></div>`).join("");
+
+  // Dias semana — empezando en Lunes
+  const diasOrden = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
+
+  // Nota mes
+  const notaMesHTML = state.editNotaMes
+    ? `<div class="nota-mes-edit">
+        <input value="${state.notaMes}" oninput="state.notaMes=this.value" placeholder="Nota para este mes..." style="flex:1;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.83rem">
+        <button class="btn btn-secondary btn-sm" onclick="state.editNotaMes=false;render()">Guardar</button>
+       </div>`
+    : `<div class="nota-mes-display" onclick="state.editNotaMes=true;render()">
+        <span style="font-size:0.75rem">📌</span>
+        <span style="font-size:0.8rem;color:#b45309;font-weight:500">${state.notaMes || "Agregar nota del mes..."}</span>
+        <span style="font-size:0.7rem;color:#6b7280;margin-left:4px">✎</span>
+       </div>`;
+
+  return `
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <button class="btn btn-secondary btn-sm" onclick="prevMes()">‹</button>
+        <span class="mes-titulo">${MESES[state.mes]} ${state.anio}</span>
+        <button class="btn btn-secondary btn-sm" onclick="nextMes()">›</button>
+        <button class="btn btn-secondary btn-sm" onclick="irHoy()">Hoy</button>
+      </div>
+      <div class="toolbar-right">
+        ${sc > 0 ? `<div class="badge-alerta" style="cursor:pointer" title="Ir al primer día sin cubrir" onclick="irPrimerSinCubrir()">⚠️ ${sc} día${sc!==1?"s":""} sin cubrir</div>` : ""}
+        <select class="filtro-select" onchange="state.filtroMedico=this.value;render()">
+          <option value="">Todos los médicos</option>
+          ${opsMedico}
+        </select>
+        <button class="btn btn-secondary btn-sm" onclick="exportarPDF()">📄 Exportar PDF</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportarMesJSON()">📤 Exportar mes</button>
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('import-json-input').click()">📥 Importar mes</button>
+        <input type="file" id="import-json-input" accept="application/json,.json" style="display:none" onchange="importarMesJSON(event)">
+      </div>
+    </div>
+
+    <div class="nota-mes-wrap">${notaMesHTML}</div>
+    <div class="leyenda">${leyendaHTML}</div>
+
+    <div class="cal-wrap">
+      <div class="cal-header">
+        ${diasOrden.map(d => `<div class="cal-dow">${d}</div>`).join("")}
+      </div>
+      <div class="cal-grid">
+        ${vaciosHTML}${diasHTML}${rellenoHTML}
+      </div>
+    </div>
+
+    <div class="notas-panel">
+      <div class="notas-panel-title">📝 Notas del mes</div>
+      <textarea rows="4" placeholder="Escribí notas, recordatorios o comentarios para ${MESES[state.mes]} ${state.anio}..." oninput="guardarNotasMes(this.value)">${escHTML(cargarNotasMes())}</textarea>
+    </div>`;
+}
+
+// ─── RENDER EQUIPO ───────────────────────────────────────────
+function renderEquipo() {
+  const filasHTML = medicos.map((m,i) => `
+    <div class="equipo-row" style="background:${i%2===0?'#fff':'#fafafa'}">
+      <div class="equipo-td">${renderAvatar(m,32)}</div>
+      <div class="equipo-td" style="font-size:0.84rem;font-weight:600;color:#111827">${m.nombre}</div>
+      <div class="equipo-td" style="font-size:0.78rem;color:#6b7280">${m.especialidad||"—"}</div>
+      <div class="equipo-td"><span style="background:${m.color}18;color:${m.color};font-size:0.72rem;font-weight:700;padding:2px 8px;border-radius:4px">${m.sigla}</span></div>
+      <div class="equipo-td">${medicos.length>1?`<button onclick="quitarMedico(${m.id})" style="background:transparent;border:none;color:#6b7280;cursor:pointer">✕</button>`:""}</div>
+    </div>`).join("");
+
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <span class="section-title" style="margin-bottom:0">Equipo médico</span>
+      <button class="btn btn-primary" onclick="abrirModalMedico()">+ Agregar médico</button>
+    </div>
+    <div class="card-wrap">
+      <div class="equipo-header">
+        ${["","Nombre","Especialidad / Rol","Sigla",""].map(h=>`<div class="equipo-th">${h}</div>`).join("")}
+      </div>
+      ${filasHTML}
+    </div>`;
+}
+
+// ─── RENDER ESTADÍSTICAS ─────────────────────────────────────
+function renderEstadisticas() {
+  const stats = getStats();
+  const filasHTML = medicos.map((m,i) => {
+    const s = stats[m.id]||{total:0,D12:0,N12:0,apoyo:0};
+    if(s.total===0 && i>0) return "";
+    return `<div class="stats-row" style="background:${i%2===0?'#fff':'#fafafa'}">
+      <div class="stats-td" style="display:flex;align-items:center;gap:8px">
+        ${renderAvatar(m,28)}
+        <span style="font-size:0.83rem;font-weight:600;color:#111827">${m.nombre}</span>
+      </div>
+      <div class="stats-td"><span style="font-family:Georgia,serif;font-size:1.3rem;color:${m.color};font-weight:700">${s.total}</span></div>
+      <div class="stats-td"><span style="font-family:Georgia,serif;font-size:1rem;color:#374151;font-weight:500">${s.D12}</span></div>
+      <div class="stats-td"><span style="font-family:Georgia,serif;font-size:1rem;color:#374151;font-weight:500">${s.N12}</span></div>
+      <div class="stats-td"><span style="font-family:Georgia,serif;font-size:1rem;color:#374151;font-weight:500">${s.apoyo}</span></div>
+    </div>`;
+  }).join("");
+
+  return `
+    <div class="section-title">${MESES[state.mes]} ${state.anio} — Distribución de guardias</div>
+    <div class="card-wrap">
+      <div class="stats-header">
+        ${["Médico","Total","☀️ 08-20","🌙 20-08","+ Apoyo"].map(h=>`<div class="stats-th">${h}</div>`).join("")}
+      </div>
+      ${filasHTML}
+    </div>`;
+}
+
+// ─── RENDER MODAL DÍA ────────────────────────────────────────
+function renderModalDia() {
+  if(!state.modalDia) return "";
+  const fecha = state.modalDia;
+  const data = diaData(fecha);
+  const dia = Number(fecha.split("-")[2]);
+  const nombreDia = DIAS_FULL[new Date(fecha).getDay()];
+
+  const opsMedico = medicos.map(m => `<option value="${m.id}">${m.sigla} — ${m.nombre}</option>`).join("");
+
+  const asigsHTML = data.asignaciones.length === 0
+    ? `<div style="padding:14px;text-align:center;color:#6b7280;font-size:0.82rem;background:#fef2f2;border-radius:7px;border:1px dashed #b91c1c">Sin médicos asignados este día</div>`
+    : ordenarAsignaciones(data.asignaciones).map((a,ai) => {
+        const m = getMedico(a.medicoId);
+        const rol = getRol(a.rol);
+        if(!m) return "";
+        return `<div class="modal-dia-asig" style="background:${rol.bg};border:1px solid ${rol.color}33;margin-bottom:6px">
+          ${renderAvatar(m,30)}
+          <div class="modal-dia-asig-info">
+            <div style="font-size:0.85rem;font-weight:600;color:#1e293b">${m.nombre}</div>
+            <div style="font-size:0.7rem;color:${rol.color};font-weight:600">${rol.desc} — ${rol.label}</div>
+          </div>
+          <button onclick="quitarAsignacion('${fecha}',${ai})" style="background:#fef2f2;border:none;color:#b91c1c;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:0.75rem;font-weight:600">Quitar</button>
+        </div>`;
+      }).join("");
+
+  return `<div class="modal-bg" onclick="if(event.target===this)cerrarModalDia()">
+    <div class="modal-box modal-dia">
+      <div class="modal-dia-header">
+        <div>
+          <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">${nombreDia} ${dia} de ${MESES[state.mes]}</div>
+          <div style="font-size:0.72rem;color:#6b7280;margin-top:2px">Click para quitar</div>
+        </div>
+        <button onclick="cerrarModalDia()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+      </div>
+
+      <div style="margin-bottom:14px">
+        <div style="font-size:0.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Médicos asignados</div>
+        ${asigsHTML}
+      </div>
+
+      <div style="border-top:1px solid #d1d5db;padding-top:14px;margin-bottom:14px">
+        <div style="font-size:0.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Agregar médico</div>
+        <div class="form-grid-2">
+          <div>
+            <div class="form-label">Médico</div>
+            <select class="form-select" id="add-medico-sel">
+              <option value="">Seleccionar...</option>
+              ${opsMedico}
+            </select>
+          </div>
+          <div>
+            <div class="form-label">Turno / Rol</div>
+            <select class="form-select" id="add-rol-sel">
+              <optgroup label="── Guardia">
+                <option value="D12">☀️ Diurno 08–20hs</option>
+                <option value="N12">🌙 Nocturno 20–08hs</option>
+              </optgroup>
+              <optgroup label="── Apoyo">
+                <option value="A4">+ Apoyo 4hs</option>
+                <option value="A6">+ Apoyo 6hs</option>
+                <option value="A8">+ Apoyo 8hs</option>
+              </optgroup>
+              <optgroup label="── Especial">
+                <option value="POL">🏥 Policlínica PA</option>
+                <option value="INT">🎓 Interno / Estudiante</option>
+              </optgroup>
+            </select>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-full" onclick="agregarAsignacionModal('${fecha}')">+ Agregar al día</button>
+      </div>
+
+      <div style="border-top:1px solid #d1d5db;padding-top:14px">
+        <div class="form-label" style="text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Nota del día</div>
+        <input class="form-input" value="${data.notas||""}" oninput="setNota('${fecha}',this.value)" placeholder="Ej: Feriado / Guardia doble...">
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── RENDER MODAL COPIAR MES ──────────────────────────────────
+function renderModalCopiar() {
+  if(!state.modalCopiar) return "";
+  const {anioNuevo, mesNuevo, anioOrigen, mesOrigen} = state.modalCopiar;
+  const calOrigen = state.historialMeses[`${anioOrigen}-${mesOrigen}`] || {};
+
+  const previewHTML = Object.entries(calOrigen)
+    .filter(([,d]) => d.asignaciones?.length > 0)
+    .slice(0,4)
+    .map(([fecha,d]) => {
+      const dia = Number(fecha.split("-")[2]);
+      const chips = d.asignaciones.slice(0,4).map(a => {
+        const m = getMedico(a.medicoId);
+        const r = getRol(a.rol);
+        return m ? `<span style="font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:3px;background:${r.bg};color:#334155">${m.sigla} ${a.rol}</span>` : "";
+      }).join("");
+      const extra = d.asignaciones.length > 4 ? `<span style="font-size:0.65rem;color:#6b7280">+${d.asignaciones.length-4}</span>` : "";
+      return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+        <span style="font-size:0.72rem;font-weight:600;color:#374151;min-width:40px">Día ${dia}</span>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">${chips}${extra}</div>
+      </div>`;
+    }).join("");
+
+  return `<div class="modal-bg">
+    <div class="modal-box modal-copiar">
+      <div style="font-family:Georgia,serif;font-size:1.1rem;color:#111827;margin-bottom:8px">${MESES[mesNuevo]} ${anioNuevo}</div>
+      <div style="font-size:0.83rem;color:#6b7280;margin-bottom:22px;line-height:1.6">
+        Este mes aún no tiene guardias cargadas.<br>
+        ¿Querés usar la disposición de <strong style="color:#111827">${MESES[mesOrigen]} ${anioOrigen}</strong> como base?
+      </div>
+      <div class="modal-preview">
+        <div style="font-size:0.7rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Vista previa — ${MESES[mesOrigen]}</div>
+        ${previewHTML}
+        <div style="font-size:0.68rem;color:#6b7280;margin-top:6px">Se copiarán las asignaciones por día de semana. Podrás editar cada día.</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button class="btn btn-primary" onclick="aplicarCopia(true)">✅ Sí, usar como base</button>
+        <button class="btn btn-secondary" onclick="aplicarCopia(false)">📋 Empezar en blanco</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── RENDER MODAL MÉDICO ─────────────────────────────────────
+function renderModalMedico() {
+  if(!state.modalMedico) return "";
+  const colores = ["#1d4ed8","#15803d","#b91c1c","#7c3aed","#b45309","#0e7490","#374151","#be185d","#9a3412","#065f46"];
+  const swatchesHTML = colores.map(c => `
+    <div class="color-swatch" style="background:${c};${state.nuevoMedico.color===c?`outline:3px solid ${c};outline-offset:2px;transform:scale(1.2)`:""}"
+      onclick="selColor('${c}')"></div>`).join("");
+
+  return `<div class="modal-bg" onclick="if(event.target===this)cerrarModalMedico()">
+    <div class="modal-box modal-medico">
+      <div style="font-family:Georgia,serif;font-size:0.95rem;margin-bottom:14px;color:#111827">Agregar médico al equipo</div>
+      <div style="margin-bottom:10px">
+        <div class="form-label">Nombre completo</div>
+        <input class="form-input" id="nm-nombre" value="${state.nuevoMedico.nombre}" oninput="state.nuevoMedico.nombre=this.value" placeholder="Ej: H. Pereira">
+      </div>
+      <div style="margin-bottom:10px">
+        <div class="form-label">Sigla (2–3 letras)</div>
+        <input class="form-input" id="nm-sigla" value="${state.nuevoMedico.sigla}" oninput="state.nuevoMedico.sigla=this.value.toUpperCase().slice(0,3)" placeholder="Ej: PER">
+      </div>
+      <div style="margin-bottom:10px">
+        <div class="form-label">Especialidad (opcional)</div>
+        <input class="form-input" id="nm-espec" value="${state.nuevoMedico.especialidad||""}" oninput="state.nuevoMedico.especialidad=this.value" placeholder="Ej: Emergencias">
+      </div>
+      <div style="margin-bottom:14px">
+        <div class="form-label" style="margin-bottom:6px">Color</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${swatchesHTML}</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-primary btn-full" onclick="confirmarNuevoMedico()">Agregar</button>
+        <button class="btn btn-secondary" onclick="cerrarModalMedico()">Cancelar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── RENDER PRINCIPAL ─────────────────────────────────────────
+function render() {
+  let contenido = "";
+  if(state.view === "calendario") contenido = renderCalendario();
+  else if(state.view === "equipo") contenido = renderEquipo();
+  else if(state.view === "estadisticas") contenido = renderEstadisticas();
+
+  const sc = sinCubrir();
+
+  document.getElementById("app").innerHTML = `
+    <div style="font-family:'Inter',sans-serif;background:#eef0f3;min-height:100vh;color:#111827">
+
+      <div class="header">
+        <div class="header-logo">
+          <span class="header-title">Guardia<span>Sync</span></span>
+          <span class="header-sep"></span>
+          <span class="header-suite">CeiboMed</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          ${sc > 0 ? `<div class="badge-alerta" style="cursor:pointer" title="Ir al primer día sin cubrir" onclick="irPrimerSinCubrir()">⚠️ ${sc} día${sc!==1?"s":""} sin cubrir</div>` : ""}
+        </div>
+      </div>
+
+      <div class="nav">
+        ${[
+          {id:"calendario", icon:"📅", label:"Calendario"},
+          {id:"equipo",     icon:"👥", label:"Equipo"},
+          {id:"estadisticas",icon:"📊", label:"Estadísticas"},
+        ].map(n => `<button class="nav-btn ${state.view===n.id?'active':''}" onclick="setView('${n.id}')">${n.icon} ${n.label}</button>`).join("")}
+      </div>
+
+      <div class="main">${contenido}</div>
+
+      <div class="footer">GuardiaSync · CeiboMed © 2026 Dr. M. Dos Santos</div>
+
+      ${renderModalDia()}
+      ${renderModalCopiar()}
+      ${renderModalMedico()}
+    </div>`;
+
+  // Restaurar filtro médico
+  const sel = document.getElementById ? null : null;
+}
+
+// ─── ACCIONES ────────────────────────────────────────────────
+
+function setView(v) { state.view = v; render(); }
+
+function irHoy() {
+  const hoy = new Date();
+  state.mes = hoy.getMonth();
+  state.anio = hoy.getFullYear();
+  render();
+}
+
+function prevMes() {
+  const na = state.mes === 0 ? state.anio-1 : state.anio;
+  const nm = state.mes === 0 ? 11 : state.mes-1;
+  irAMes(na, nm);
+}
+
+function nextMes() {
+  const na = state.mes === 11 ? state.anio+1 : state.anio;
+  const nm = state.mes === 11 ? 0 : state.mes+1;
+  irAMes(na, nm);
+}
+
+function irAMes(anioNuevo, mesNuevo) {
+  // Guardar mes actual (memoria + localStorage)
+  state.historialMeses[`${state.anio}-${state.mes}`] = state.calendario;
+  state.historialNotas[`${state.anio}-${state.mes}`] = state.notaMes;
+  guardarEstado();
+
+  const clave = `${anioNuevo}-${mesNuevo}`;
+  const calGuardado = cargarCalMes(anioNuevo, mesNuevo);
+  if(calGuardado) {
+    state.calendario = calGuardado;
+    state.historialMeses[clave] = calGuardado;
+    state.notaMes = state.historialNotas[clave] || "";
+    state.anio = anioNuevo;
+    state.mes = mesNuevo;
+    render();
+  } else if(state.historialMeses[clave]) {
+    state.calendario = state.historialMeses[clave];
+    state.notaMes = state.historialNotas[clave] || "";
+    state.anio = anioNuevo;
+    state.mes = mesNuevo;
+    render();
+  } else {
+    state.modalCopiar = { anioNuevo, mesNuevo, anioOrigen:state.anio, mesOrigen:state.mes };
+    render();
+  }
+}
+
+function aplicarCopia(copiar) {
+  const {anioNuevo, mesNuevo, anioOrigen, mesOrigen} = state.modalCopiar;
+  const calBase = state.historialMeses[`${anioOrigen}-${mesOrigen}`];
+  const calNuevo = generarMesVacio(anioNuevo, mesNuevo);
+
+  if(copiar && calBase) {
+    const plantilla = {};
+    Object.entries(calBase).forEach(([fecha,data]) => {
+      if(!data.asignaciones?.length) return;
+      const ds = new Date(fecha).getDay();
+      if(!plantilla[ds]) plantilla[ds] = [];
+      plantilla[ds].push(data.asignaciones);
+    });
+
+    const contador = {};
+    const total = new Date(anioNuevo, mesNuevo+1, 0).getDate();
+    for(let d=1; d<=total; d++) {
+      const f = `${anioNuevo}-${String(mesNuevo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const ds = new Date(anioNuevo, mesNuevo, d).getDay();
+      if(!contador[ds]) contador[ds] = 0;
+      const idx = contador[ds];
+      contador[ds]++;
+      const p = plantilla[ds];
+      if(p?.length > 0) {
+        calNuevo[f] = { asignaciones:[...p[idx % p.length]], notas:"" };
+      }
+    }
+  }
+
+  state.calendario = calNuevo;
+  state.notaMes = "";
+  state.historialMeses[`${anioNuevo}-${mesNuevo}`] = calNuevo;
+  state.anio = anioNuevo;
+  state.mes = mesNuevo;
+  state.modalCopiar = null;
+  guardarEstado();
+  render();
+}
+
+function abrirModalDia(fecha) {
+  state.modalDia = fecha;
+  render();
+}
+
+function cerrarModalDia() {
+  state.modalDia = null;
+  render();
+}
+
+function agregarAsignacionModal(fecha) {
+  const medicoId = document.getElementById("add-medico-sel").value;
+  const rol = document.getElementById("add-rol-sel").value;
+  if(!medicoId) return;
+  if(!state.calendario[fecha]) state.calendario[fecha] = {asignaciones:[], notas:""};
+  state.calendario[fecha].asignaciones.push({medicoId:Number(medicoId), rol, id:Date.now()});
+  guardarEstado();
+  render();
+}
+
+function quitarAsignacion(fecha, idx) {
+  state.calendario[fecha].asignaciones.splice(idx, 1);
+  guardarEstado();
+  render();
+}
+
+function setNota(fecha, nota) {
+  if(!state.calendario[fecha]) state.calendario[fecha] = {asignaciones:[], notas:""};
+  state.calendario[fecha].notas = nota;
+  guardarEstado();
+}
+
+function abrirModalMedico() { state.modalMedico = true; render(); }
+function cerrarModalMedico() { state.modalMedico = false; state.nuevoMedico = {nombre:"",sigla:"",color:"#1d4ed8"}; render(); }
+
+function selColor(c) {
+  state.nuevoMedico.color = c;
+  render();
+}
+
+function confirmarNuevoMedico() {
+  const nm = state.nuevoMedico;
+  if(!nm.nombre || !nm.sigla) return;
+  medicos.push({id:Date.now(), ...nm});
+  state.modalMedico = false;
+  state.nuevoMedico = {nombre:"",sigla:"",color:"#1d4ed8"};
+  guardarEstado();
+  render();
+}
+
+function quitarMedico(id) {
+  if(medicos.length <= 1) return;
+  medicos = medicos.filter(m => m.id !== id);
+  guardarEstado();
+  render();
+}
+
+// ─── EXPORTAR PDF ────────────────────────────────────────────
+function exportarPDF() {
+  const totalD = new Date(state.anio, state.mes+1, 0).getDate();
+  const primerD = new Date(state.anio, state.mes, 1).getDay();
+  const notas = cargarNotasMes();
+
+  const celdaHTML = (fecha) => {
+    const data = diaData(fecha);
+    const dia = Number(fecha.split("-")[2]);
+    const asigsOrd = ordenarAsignaciones(data.asignaciones);
+    const principal = asigsOrd.filter(a => a.rol === "D12" || a.rol === "N12");
+    const apoyo = asigsOrd.filter(a => a.rol !== "D12" && a.rol !== "N12");
+
+    // Médico principal en negro
+    const principalHTML = principal.map(a => {
+      const m = getMedico(a.medicoId);
+      const rol = getRol(a.rol);
+      if(!m) return "";
+      return `<div class="p-med">${escHTML(m.nombre)}<span class="p-hora"> · ${rol.label}</span></div>`;
+    }).join("");
+
+    // Médicos de apoyo en rojo
+    const apoyoHTML = apoyo.map(a => {
+      const m = getMedico(a.medicoId);
+      const rol = getRol(a.rol);
+      if(!m) return "";
+      return `<div class="a-med">${escHTML(m.nombre)}<span class="a-hora"> · ${rol.label}</span></div>`;
+    }).join("");
+
+    return `<td><div class="num">${dia}</div>${principalHTML}${apoyoHTML}</td>`;
+  };
+
+  const vacias = Array.from({length:primerD}, () => `<td class="vacio"></td>`);
+  const diasCeldas = Array.from({length:totalD}, (_,i) => {
+    const f = `${state.anio}-${String(state.mes+1).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`;
+    return celdaHTML(f);
+  });
+  const relleno = Array.from({length:(7-((primerD+totalD)%7))%7}, () => `<td class="vacio"></td>`);
+  const todas = [...vacias, ...diasCeldas, ...relleno];
+  const filas = [];
+  for(let i=0; i<todas.length; i+=7) filas.push(`<tr>${todas.slice(i,i+7).join("")}</tr>`);
+
+  const notasHTML = notas.trim()
+    ? `<div class="notas-wrap">
+         <div class="notas-titulo">Notas</div>
+         <div class="notas-cuerpo">${escHTML(notas)}</div>
+       </div>`
+    : "";
+
+  const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+<title>Guardias ${MESES[state.mes]} ${state.anio}</title>
+<style>
+  @page { size: A4 landscape; margin: 14mm 12mm; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family: Arial, Helvetica, sans-serif; color:#111; background:#fff; }
+  h1.titulo { text-align:center; font-size:22pt; font-weight:700; letter-spacing:1px; color:#111; margin-bottom:16px; }
+  table { width:100%; border-collapse:collapse; table-layout:fixed; }
+  thead th { background:#e5e7eb; color:#374151; font-size:9pt; font-weight:700; padding:6px 0; text-align:center; border:1px solid #9ca3af; }
+  td { border:1px solid #9ca3af; vertical-align:top; padding:5px 6px; height:82px; background:#fff; }
+  td.vacio { background:#fff; }
+  .num { font-size:8pt; font-weight:700; color:#6b7280; margin-bottom:4px; }
+  .p-med { font-size:8pt; font-weight:700; color:#000; line-height:1.35; margin-bottom:2px; }
+  .p-hora { font-weight:400; color:#374151; font-size:7pt; }
+  .a-med { font-size:7.5pt; font-weight:600; color:#c0271e; line-height:1.3; margin-bottom:1px; }
+  .a-hora { font-weight:400; color:#c0271e; font-size:6.5pt; }
+  .notas-wrap { margin-top:18px; }
+  .notas-titulo { font-size:12pt; font-weight:700; color:#111; margin-bottom:6px; border-bottom:1px solid #9ca3af; padding-bottom:4px; }
+  .notas-cuerpo { font-size:9pt; color:#374151; line-height:1.5; white-space:pre-wrap; }
+</style></head><body>
+<h1 class="titulo">${MESES[state.mes].toUpperCase()} ${state.anio}</h1>
+<table>
+  <thead><tr>${["L","M","M","J","V","S","D"].map(d=>`<th>${d}</th>`).join("")}</tr></thead>
+  <tbody>${filas.join("\n")}</tbody>
+</table>
+${notasHTML}
+</body></html>`;
+
+  // CAMBIO 2: abrir en nueva ventana y disparar el diálogo de impresión/PDF
+  const win = window.open("", "_blank");
+  if (!win) {
+    alert("El navegador bloqueó la ventana emergente. Permití las ventanas emergentes para generar el PDF.");
+    return;
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  win.focus();
+  // Esperar a que el contenido se renderice antes de imprimir
+  const lanzarPrint = () => { try { win.focus(); win.print(); } catch(e) {} };
+  if (win.document.readyState === "complete") {
+    setTimeout(lanzarPrint, 350);
+  } else {
+    win.onload = () => setTimeout(lanzarPrint, 350);
+    setTimeout(lanzarPrint, 700);
+  }
+}
+
+// ─── IR AL PRIMER DÍA SIN CUBRIR (CAMBIO 5) ──────────────────
+function irPrimerSinCubrir() {
+  if(state.view !== "calendario") { state.view = "calendario"; render(); }
+  const fechas = Object.keys(state.calendario).sort();
+  const primera = fechas.find(f => diaData(f).asignaciones.length === 0);
+  if(!primera) return;
+  const el = document.getElementById("cell-" + primera);
+  if(el) {
+    el.scrollIntoView({behavior:"smooth", block:"center"});
+    const prev = el.style.boxShadow;
+    el.style.boxShadow = "inset 0 0 0 3px #b91c1c";
+    setTimeout(() => { el.style.boxShadow = prev; }, 2200);
+  }
+}
+
+// ─── EXPORTAR / IMPORTAR MES JSON (CAMBIO 6) ─────────────────
+function exportarMesJSON() {
+  const data = {
+    app: "GuardiaSync",
+    anio: state.anio,
+    mes: state.mes,
+    mesNombre: MESES[state.mes],
+    calendario: state.calendario,
+    medicos: medicos,
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:"application/json"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `GuardiaSync_${MESES[state.mes]}_${state.anio}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function importarMesJSON(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if(data.calendario && typeof data.calendario === "object") state.calendario = data.calendario;
+      if(Array.isArray(data.medicos) && data.medicos.length) medicos = data.medicos;
+      if(typeof data.anio === "number") state.anio = data.anio;
+      if(typeof data.mes === "number") state.mes = data.mes;
+      state.historialMeses[`${state.anio}-${state.mes}`] = state.calendario;
+      guardarEstado();
+      render();
+      alert(`Mes importado: ${MESES[state.mes]} ${state.anio}`);
+    } catch(err) {
+      alert("Archivo JSON inválido.");
+    }
+    ev.target.value = "";
+  };
+  reader.readAsText(file);
+}
+
+// ─── LOGIN + INIT (CAMBIO 4) ─────────────────────────────────
+function iniciarApp() {
+  cargarEstado();
+  render();
+}
+
+function intentarLogin() {
+  const val = document.getElementById("login-pass").value;
+  if(val === "emergencia") {
+    try { sessionStorage.setItem("guardias_auth", "ok"); } catch(e) {}
+    document.getElementById("login").style.display = "none";
+    iniciarApp();
+  } else {
+    document.getElementById("login-error").style.display = "block";
+  }
+}
+
+(function bootstrap() {
+  let auth = false;
+  try { auth = sessionStorage.getItem("guardias_auth") === "ok"; } catch(e) {}
+  if(auth) {
+    document.getElementById("login").style.display = "none";
+    iniciarApp();
+  } else {
+    const inp = document.getElementById("login-pass");
+    if(inp) inp.focus();
+  }
+})();
+</script>
+</body>
+</html>
