@@ -244,6 +244,7 @@ let state = {
   editNotaMes: false,
   addMedico: "",
   addRol: "D12",
+  editHorario: null,
   nuevoMedico: { nombre:"", sigla:"", color:"#1d4ed8" },
 };
 
@@ -251,6 +252,9 @@ let state = {
 
 function getMedico(id) { return medicos.find(m => m.id === Number(id)); }
 function getRol(id) { return ROLES_BASE.find(r => r.id === id) || ROLES_BASE[0]; }
+// Horario efectivo de una asignación: usa el override editable por médico/día si existe, si no el del rol.
+function horarioDe(a) { return (a && a.horario != null && String(a.horario).trim() !== "") ? String(a.horario) : getRol(a.rol).label; }
+function escAttr(s) { return escHTML(s).replace(/"/g, "&quot;"); }
 
 // ─── NOTAS DEL MES (localStorage) ────────────────────────────
 function escHTML(s) {
@@ -398,13 +402,13 @@ function renderAsigCelda(a) {
   if(esApoyo) {
     // Apoyo: mantiene color del rol
     return `<div class="asig-row apoyo" style="--rol-color:${rol.color};--rol-bg:${rol.bg};border-left-color:${rol.color};background:${rol.bg}">
-      <div class="asig-rol-label" style="color:${rol.color}">${rol.label}</div>
+      <div class="asig-rol-label" style="color:${rol.color}">${escHTML(horarioDe(a))}</div>
       <div class="asig-nombre apoyo-nombre" style="color:${rol.color}">${m.nombre}</div>
     </div>`;
   } else {
     // CAMBIO 2+3: guardia en gris neutro, con horario al lado del nombre
     return `<div class="asig-row guardia">
-      <div class="asig-nombre">${m.nombre}<span class="horario">· ${rol.label}</span></div>
+      <div class="asig-nombre">${m.nombre}<span class="horario">· ${escHTML(horarioDe(a))}</span></div>
     </div>`;
   }
 }
@@ -616,11 +620,19 @@ function renderModalDia() {
         const m = getMedico(a.medicoId);
         const rol = getRol(a.rol);
         if(!m) return "";
+        const editando = state.editHorario === `${fecha}|${ai}`;
+        const horarioHTML = editando
+          ? `<input id="horario-edit-input" type="text" value="${escAttr(horarioDe(a))}"
+               onblur="guardarHorario('${fecha}',${ai},this.value)"
+               onkeydown="if(event.key==='Enter'){this.blur();}else if(event.key==='Escape'){cancelEditHorario();}"
+               style="font-size:0.7rem;font-weight:600;width:88px;padding:1px 5px;border:1px solid ${rol.color};border-radius:4px;color:${rol.color}">`
+          : `<span onclick="editarHorario('${fecha}',${ai})" title="Click para editar el horario"
+               style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px">${escHTML(horarioDe(a))}</span>`;
         return `<div class="modal-dia-asig" style="background:${rol.bg};border:1px solid ${rol.color}33;margin-bottom:6px">
           ${renderAvatar(m,30)}
           <div class="modal-dia-asig-info">
             <div style="font-size:0.85rem;font-weight:600;color:#1e293b">${m.nombre}</div>
-            <div style="font-size:0.7rem;color:${rol.color};font-weight:600">${rol.desc} — ${rol.label}</div>
+            <div style="font-size:0.7rem;color:${rol.color};font-weight:600">${escHTML(rol.desc)} — ${horarioHTML}</div>
           </div>
           <button onclick="quitarAsignacion('${fecha}',${ai})" style="background:#fef2f2;border:none;color:#b91c1c;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:0.75rem;font-weight:600">Quitar</button>
         </div>`;
@@ -631,7 +643,7 @@ function renderModalDia() {
       <div class="modal-dia-header">
         <div>
           <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">${nombreDia} ${dia} de ${MESES[state.mes]}</div>
-          <div style="font-size:0.72rem;color:#6b7280;margin-top:2px">Click para quitar</div>
+          <div style="font-size:0.72rem;color:#6b7280;margin-top:2px">Click en el horario para editarlo · Quitar para eliminar</div>
         </div>
         <button onclick="cerrarModalDia()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
       </div>
@@ -918,6 +930,28 @@ function quitarAsignacion(fecha, idx) {
   render();
 }
 
+// ─── HORARIO EDITABLE POR MÉDICO/DÍA ─────────────────────────
+function editarHorario(fecha, ai) {
+  state.editHorario = `${fecha}|${ai}`;
+  render();
+  setTimeout(() => { const el = document.getElementById("horario-edit-input"); if (el) { el.focus(); el.select(); } }, 0);
+}
+function guardarHorario(fecha, ai, valor) {
+  const data = diaData(fecha);
+  const a = ordenarAsignaciones(data.asignaciones)[ai];  // misma direccionamiento que el resto del modal
+  if (a) {
+    const v = String(valor == null ? "" : valor).trim();
+    if (v) a.horario = v; else delete a.horario;   // vacío => vuelve al horario del rol
+  }
+  state.editHorario = null;
+  guardarEstado();   // persiste junto con los demás datos del día (localStorage)
+  render();
+}
+function cancelEditHorario() {
+  state.editHorario = null;
+  render();
+}
+
 function setNota(fecha, nota) {
   if(!state.calendario[fecha]) state.calendario[fecha] = {asignaciones:[], notas:""};
   state.calendario[fecha].notas = nota;
@@ -967,7 +1001,7 @@ function exportarPDF() {
       const m = getMedico(a.medicoId);
       const rol = getRol(a.rol);
       if(!m) return "";
-      return `<div class="p-med">${escHTML(m.nombre)}<span class="p-hora"> · ${rol.label}</span></div>`;
+      return `<div class="p-med">${escHTML(m.nombre)}<span class="p-hora"> · ${escHTML(horarioDe(a))}</span></div>`;
     }).join("");
 
     // Médicos de apoyo en rojo
@@ -975,7 +1009,7 @@ function exportarPDF() {
       const m = getMedico(a.medicoId);
       const rol = getRol(a.rol);
       if(!m) return "";
-      return `<div class="a-med">${escHTML(m.nombre)}<span class="a-hora"> · ${rol.label}</span></div>`;
+      return `<div class="a-med">${escHTML(m.nombre)}<span class="a-hora"> · ${escHTML(horarioDe(a))}</span></div>`;
     }).join("");
 
     return `<td><div class="num">${dia}</div>${principalHTML}${apoyoHTML}</td>`;
