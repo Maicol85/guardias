@@ -325,45 +325,32 @@ function generarMesVacio(anio, mes) {
   return cal;
 }
 
-function cargarAgosto2026() {
-  const cal = generarMesVacio(2026, 7);
-  const datos = {
-    "2026-08-01": [{medicoId:7,rol:"D12"},{medicoId:8,rol:"D12"}],
-    "2026-08-02": [{medicoId:9,rol:"D12"},{medicoId:2,rol:"D12"}],
-    "2026-08-03": [{medicoId:1,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:10,rol:"N12"}],
-    "2026-08-04": [{medicoId:2,rol:"D12"},{medicoId:3,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:1,rol:"N12"}],
-    "2026-08-05": [{medicoId:4,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:11,rol:"N12"}],
-    "2026-08-06": [{medicoId:5,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:13,rol:"N12"}],
-    "2026-08-07": [{medicoId:6,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:5,rol:"N12"}],
-    "2026-08-08": [{medicoId:7,rol:"D12"},{medicoId:8,rol:"D12"}],
-    "2026-08-09": [{medicoId:9,rol:"D12"},{medicoId:2,rol:"D12"}],
-    "2026-08-10": [{medicoId:1,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:10,rol:"N12"}],
-    "2026-08-11": [{medicoId:2,rol:"D12"},{medicoId:3,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:1,rol:"N12"}],
-    "2026-08-12": [{medicoId:4,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:11,rol:"N12"}],
-    "2026-08-13": [{medicoId:5,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:13,rol:"N12"}],
-    "2026-08-14": [{medicoId:6,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:5,rol:"N12"}],
-    "2026-08-15": [{medicoId:7,rol:"D12"},{medicoId:8,rol:"D12"}],
-    "2026-08-16": [{medicoId:9,rol:"D12"},{medicoId:2,rol:"D12"}],
-    "2026-08-17": [{medicoId:1,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:10,rol:"N12"}],
-    "2026-08-18": [{medicoId:2,rol:"D12"},{medicoId:3,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:12,rol:"N12"}],
-    "2026-08-19": [{medicoId:4,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:11,rol:"N12"}],
-    "2026-08-20": [{medicoId:5,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:13,rol:"N12"}],
-    "2026-08-21": [{medicoId:6,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:1,rol:"N12"}],
-    "2026-08-22": [{medicoId:7,rol:"D12"},{medicoId:8,rol:"D12"}],
-    "2026-08-23": [{medicoId:9,rol:"D12"},{medicoId:2,rol:"D12"}],
-    "2026-08-24": [{medicoId:1,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:10,rol:"N12"}],
-    "2026-08-25": [{medicoId:2,rol:"D12"},{medicoId:3,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:12,rol:"N12"}],
-    "2026-08-26": [{medicoId:4,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:11,rol:"N12"}],
-    "2026-08-27": [{medicoId:5,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:13,rol:"N12"}],
-    "2026-08-28": [{medicoId:6,rol:"D12"},{medicoId:14,rol:"A4"},{medicoId:5,rol:"N12"}],
-    "2026-08-29": [{medicoId:7,rol:"D12"},{medicoId:8,rol:"D12"}],
-    "2026-08-30": [{medicoId:9,rol:"D12"},{medicoId:2,rol:"D12"}],
-    "2026-08-31": [{medicoId:1,rol:"D12"},{medicoId:14,rol:"A6"},{medicoId:10,rol:"N12"}],
-  };
-  Object.entries(datos).forEach(([f,a]) => { if(cal[f]) cal[f].asignaciones = a; });
-  cal["2026-08-14"].notas = "Nahira pide cambio";
+// ─── PATRÓN SEMANAL POR DEFECTO (planilla real) ──────────────
+// dow: 0=Domingo 1=Lunes 2=Martes 3=Miércoles 4=Jueves 5=Viernes 6=Sábado
+// medicoId: 1 Quiñones · 2 A. Cuña · 3 B. Arbiza · 4 H. Pereira · 5 Trivel · 6 Panizza
+//           7 H. Colón · 8 C. Balle · 9 Borrero · 10 S. Rodriguez · 11 Ayala · 13 Dos Santos · 14 E. García
+const PATRON_SEMANAL = {
+  1: [ {medicoId:1, rol:"D12"}, {medicoId:10, rol:"N12"}, {medicoId:14, rol:"A6"} ],                                                     // Lunes
+  2: [ {medicoId:2, rol:"D12", horario:"08-14hs"}, {medicoId:3, rol:"D12", horario:"14-20hs"}, {medicoId:1, rol:"N12"}, {medicoId:14, rol:"A4"} ], // Martes (diurno compartido)
+  3: [ {medicoId:4, rol:"D12"}, {medicoId:11, rol:"N12"}, {medicoId:14, rol:"A6"} ],                                                     // Miércoles
+  4: [ {medicoId:5, rol:"D12"}, {medicoId:13, rol:"N12"}, {medicoId:14, rol:"A4"} ],                                                     // Jueves
+  5: [ {medicoId:6, rol:"D12"}, {medicoId:5, rol:"N12"}, {medicoId:14, rol:"A4"} ],                                                      // Viernes
+  6: [ {medicoId:7, rol:"D12"}, {medicoId:8, rol:"N12"} ],                                                                                // Sábado
+  0: [ {medicoId:9, rol:"D12"}, {medicoId:2, rol:"N12"} ],                                                                                // Domingo
+};
+// Genera un mes completo aplicando el patrón semanal a cada día según su día de semana.
+function aplicarPatronMes(anio, mes) {
+  const cal = generarMesVacio(anio, mes);
+  const total = new Date(anio, mes + 1, 0).getDate();
+  for (let d = 1; d <= total; d++) {
+    const f = `${anio}-${String(mes + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const dow = new Date(f + "T00:00:00").getDay();
+    const patron = PATRON_SEMANAL[dow] || [];
+    cal[f].asignaciones = patron.map((a, i) => ({ ...a, id: Date.now() + d * 100 + i }));
+  }
   return cal;
 }
+function cargarAgosto2026() { return aplicarPatronMes(2026, 7); }
 
 state.calendario = cargarAgosto2026();
 state.historialMeses["2026-7"] = state.calendario;
@@ -1676,7 +1663,19 @@ function importarMesJSON(ev) {
 }
 
 // ─── LOGIN + INIT (CAMBIO 4) ─────────────────────────────────
+function initPatronDefault() {
+  // Guardar la plantilla por defecto (patrón semanal) en localStorage
+  try { localStorage.setItem("guardias_plantilla_default", JSON.stringify(PATRON_SEMANAL)); } catch(e) {}
+  // Fix único: limpiar agosto 2026 y reemplazar por el patrón correcto
+  try {
+    if (localStorage.getItem("guardias_patron_aug2026_v1") !== "1") {
+      localStorage.setItem(calKey(2026, 7), JSON.stringify(aplicarPatronMes(2026, 7)));
+      localStorage.setItem("guardias_patron_aug2026_v1", "1");
+    }
+  } catch(e) {}
+}
 function iniciarApp() {
+  initPatronDefault();
   cargarEstado();
   render();
 }
