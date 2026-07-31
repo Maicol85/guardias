@@ -251,6 +251,9 @@ let state = {
   semanaAncla: null,    // fecha ancla de la vista semanal
   histModal: null,      // fecha cuyo historial se muestra
   jefe: (function(){ try { return sessionStorage.getItem("guardias_jefe") === "1"; } catch(e){ return false; } })(),  // MEJORA 13
+  ausPanel: false,        // panel de ausencias abierto
+  ausDetalleFecha: null,  // detalle de ausencias de un día
+  ausForm: { medicoId:"", tipo:"licencia", desde:"", hasta:"", motivo:"" },
   nuevoMedico: { nombre:"", sigla:"", color:"#1d4ed8" },
 };
 
@@ -477,13 +480,16 @@ function renderCeldaDia(fecha) {
   // MEJORA 1/4: resaltar día origen cuando se está copiando o intercambiando
   const copiaStyle = (state.copiarDiaOrigen === fecha) ? ";outline:3px solid #2563eb;outline-offset:-3px;background:#eff6ff"
     : (state.swapDiaOrigen === fecha) ? ";outline:3px solid #16a34a;outline-offset:-3px;background:#f0fdf4" : "";
+  // Ausencias: alerta destacada si hay ausencia sin médico de reemplazo
+  const ausAlerta = diaAusSinCubrir(fecha) ? ";box-shadow:inset 0 0 0 2px #dc2626" : "";
 
-  return `<div id="cell-${fecha}" class="${clases}" style="opacity:${opacidad}${copiaStyle}" onclick="clickDia('${fecha}')" ondragover="permitirDrop(event)" ondragleave="salirDrop(event)" ondrop="soltarMedico(event,'${fecha}')">
+  return `<div id="cell-${fecha}" class="${clases}" style="opacity:${opacidad}${copiaStyle}${ausAlerta}" onclick="clickDia('${fecha}')" ondragover="permitirDrop(event)" ondragleave="salirDrop(event)" ondrop="soltarMedico(event,'${fecha}')">
     <div class="cal-num-wrap">
       <span class="${numClases}">${dia}</span>
       <div class="cal-flags">
         ${data.notas ? `<span style="font-size:0.55rem;color:#b45309;font-weight:700">📌</span>` : ""}
         ${histGet(fecha).length ? `<span onclick="abrirHistorial('${fecha}',event)" title="Ver historial de cambios" style="font-size:0.58rem;cursor:pointer">📜</span>` : ""}
+        ${(function(){ const aus = ausDeDia(fecha); if (!aus.length) return ""; const tipos = [...new Set(aus.map(a => a.tipo))]; return `<span onclick="abrirAusDetalle('${fecha}',event)" title="${aus.length} ausencia(s) — ver detalle" style="font-size:0.58rem;cursor:pointer">${tipos.map(t => tipoAus(t).emoji).join("")}</span>`; })()}
         ${sinCubrirDia && !state.filtroMedico ? `<span style="font-size:0.58rem;color:#b91c1c;font-weight:700">!</span>` : ""}
       </div>
     </div>
@@ -876,6 +882,7 @@ function render() {
         </div>
         <div style="display:flex;gap:8px;align-items:center">
           ${sc > 0 ? `<div class="badge-alerta" style="cursor:pointer" title="Ir al primer día sin cubrir" onclick="irPrimerSinCubrir()">⚠️ ${sc} día${sc!==1?"s":""} sin cubrir</div>` : ""}
+          ${(function(){ const p = pendientesMes(); return `<button class="btn btn-secondary btn-sm" onclick="abrirAusencias()" title="Ausencias y solicitudes" style="position:relative">📋 Ausencias${p > 0 ? `<span style="position:absolute;top:-6px;right:-6px;background:#dc2626;color:#fff;border-radius:999px;min-width:16px;height:16px;font-size:0.6rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 3px">${p}</span>` : ""}</button>`; })()}
           ${state.jefe
             ? `<button class="btn btn-secondary btn-sm" onclick="cerrarSesionJefe()" title="Volver a modo solo lectura">🔓 Cerrar sesión</button>`
             : `<button class="btn btn-secondary btn-sm" onclick="activarJefe()" title="Acceso de jefe (edición)" style="opacity:.75">🔒</button>`}
@@ -898,6 +905,8 @@ function render() {
       ${renderModalCopiar()}
       ${renderModalMedico()}
       ${renderModalHist()}
+      ${renderModalAusencias()}
+      ${renderModalAusDetalle()}
     </div>`;
 
   // Restaurar filtro médico
@@ -960,6 +969,61 @@ function aplicarPlantilla() {
   guardarEstado();
   render();
   alert("Plantilla aplicada a " + aplicados + " día(s).");
+}
+
+// ─── GESTOR DE AUSENCIAS Y SOLICITUDES ───────────────────────
+const TIPOS_AUS = {
+  licencia:   { label: "Licencia",         emoji: "🔴", color: "#b91c1c", sinCubrir: true },
+  solicitud:  { label: "Solicitud de día", emoji: "🟡", color: "#b45309", sinCubrir: false },
+  enfermedad: { label: "Enfermedad",       emoji: "🟠", color: "#c2410c", sinCubrir: true },
+  otro:       { label: "Otro",             emoji: "⚪", color: "#6b7280", sinCubrir: false },
+};
+function tipoAus(t) { return TIPOS_AUS[t] || TIPOS_AUS.otro; }
+function ausKey(anio, mes) { return `guardias_ausencias_${anio}_${mes + 1}`; }
+function ausGet() {
+  try { const a = JSON.parse(localStorage.getItem(ausKey(state.anio, state.mes))); return Array.isArray(a) ? a : []; }
+  catch (e) { return []; }
+}
+function ausSave(arr) { try { localStorage.setItem(ausKey(state.anio, state.mes), JSON.stringify(arr)); } catch (e) {} }
+function fechaDeDia(d) { return `${state.anio}-${String(state.mes + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
+function ausDeDia(fecha) { const d = dnum(fecha); return ausGet().filter(a => d >= a.desde && d <= a.hasta); }
+// Días de ausencia (licencia/enfermedad/solicitud) sin ningún médico asignado => pendientes de cubrir.
+function pendientesMes() {
+  const dias = new Set();
+  ausGet().forEach(a => {
+    for (let d = a.desde; d <= a.hasta; d++) {
+      const f = fechaDeDia(d);
+      if (!(diaData(f).asignaciones || []).length) dias.add(d);
+    }
+  });
+  return dias.size;
+}
+function diaAusSinCubrir(fecha) {
+  const aus = ausDeDia(fecha);
+  if (!aus.length) return false;
+  const cubierto = (diaData(fecha).asignaciones || []).length > 0;
+  return !cubierto;   // hay ausencia y no hay médico asignado (reemplazo)
+}
+function abrirAusencias() { state.ausPanel = true; render(); }
+function cerrarAusencias() { state.ausPanel = false; render(); }
+function abrirAusDetalle(fecha, ev) { if (ev) ev.stopPropagation(); state.ausDetalleFecha = fecha; render(); }
+function cerrarAusDetalle() { state.ausDetalleFecha = null; render(); }
+function guardarAusencia() {
+  const f = state.ausForm;
+  const medicoId = Number(f.medicoId);
+  const desde = parseInt(f.desde, 10), hasta = parseInt(f.hasta, 10);
+  const total = new Date(state.anio, state.mes + 1, 0).getDate();
+  if (!medicoId) { alert("Elegí un médico."); return; }
+  if (!desde || !hasta || desde < 1 || hasta > total || desde > hasta) { alert("Revisá los días (desde/hasta) dentro del mes."); return; }
+  const arr = ausGet();
+  arr.push({ id: Date.now(), medicoId, tipo: f.tipo, desde, hasta, motivo: (f.motivo || "").trim(), ts: Date.now() });
+  ausSave(arr);
+  state.ausForm = { medicoId: "", tipo: "licencia", desde: "", hasta: "", motivo: "" };
+  render();
+}
+function borrarAusencia(id) {
+  ausSave(ausGet().filter(a => a.id !== id));
+  render();
 }
 
 function irHoy() {
@@ -1234,6 +1298,77 @@ function renderModalHist() {
         <button onclick="cerrarHistorial()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
       </div>
       <div style="max-height:50vh;overflow:auto">${filas}</div>
+    </div>
+  </div>`;
+}
+
+// ─── PANEL DE AUSENCIAS Y SOLICITUDES ────────────────────────
+function renderModalAusencias() {
+  if (!state.ausPanel) return "";
+  const f = state.ausForm;
+  const opsMed = medicos.map(m => `<option value="${m.id}" ${String(f.medicoId) === String(m.id) ? "selected" : ""}>${m.sigla} — ${m.nombre}</option>`).join("");
+  const opsTipo = Object.keys(TIPOS_AUS).map(t => `<option value="${t}" ${f.tipo === t ? "selected" : ""}>${TIPOS_AUS[t].emoji} ${TIPOS_AUS[t].label}</option>`).join("");
+  const arr = ausGet().slice().sort((a, b) => a.desde - b.desde);
+  const lista = arr.length
+    ? arr.map(a => {
+        const m = getMedico(a.medicoId); const ti = tipoAus(a.tipo);
+        const rango = a.desde === a.hasta ? `día ${a.desde}` : `días ${a.desde}–${a.hasta}`;
+        let sinCubrir = 0; for (let d = a.desde; d <= a.hasta; d++) if (!(diaData(fechaDeDia(d)).asignaciones || []).length) sinCubrir++;
+        const alerta = sinCubrir > 0 ? `<span style="color:#dc2626;font-weight:700;font-size:0.7rem"> · ⚠️ ${sinCubrir} sin cubrir</span>` : "";
+        return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #eee">
+          <span style="font-size:0.9rem">${ti.emoji}</span>
+          <div style="flex:1">
+            <div style="font-size:0.82rem;font-weight:600;color:#111827">${m ? escHTML(m.nombre) : "—"} · <span style="color:${ti.color}">${ti.label}</span></div>
+            <div style="font-size:0.72rem;color:#6b7280">${MESES[state.mes]} · ${rango}${a.motivo ? " · " + escHTML(a.motivo) : ""}${alerta}</div>
+          </div>
+          ${state.jefe ? `<button onclick="borrarAusencia(${a.id})" style="background:#fef2f2;border:none;color:#b91c1c;border-radius:5px;padding:2px 8px;cursor:pointer;font-size:0.72rem">Eliminar</button>` : ""}
+        </div>`;
+      }).join("")
+    : `<div style="padding:12px;text-align:center;color:#6b7280;font-size:0.82rem">Sin ausencias registradas este mes.</div>`;
+  const formHTML = state.jefe ? `
+    <div style="border-top:1px solid #d1d5db;padding-top:12px;margin-top:12px">
+      <div class="form-label" style="text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Registrar ausencia / solicitud</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <select class="form-select" onchange="state.ausForm.medicoId=this.value"><option value="">Médico...</option>${opsMed}</select>
+        <select class="form-select" onchange="state.ausForm.tipo=this.value">${opsTipo}</select>
+        <input class="form-input" type="number" min="1" max="31" placeholder="Día desde" value="${f.desde}" oninput="state.ausForm.desde=this.value">
+        <input class="form-input" type="number" min="1" max="31" placeholder="Día hasta" value="${f.hasta}" oninput="state.ausForm.hasta=this.value">
+      </div>
+      <input class="form-input" placeholder="Motivo (opcional)" value="${escAttr(f.motivo)}" oninput="state.ausForm.motivo=this.value" style="margin-bottom:8px">
+      <button class="btn btn-primary btn-full" onclick="guardarAusencia()">➕ Registrar</button>
+    </div>` : "";
+  return `<div class="modal-bg" onclick="if(event.target===this)cerrarAusencias()">
+    <div class="modal-box" style="max-width:520px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">📋 Ausencias — ${MESES[state.mes]} ${state.anio}</div>
+        <button onclick="cerrarAusencias()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+      </div>
+      <div style="max-height:40vh;overflow:auto">${lista}</div>
+      ${formHTML}
+    </div>
+  </div>`;
+}
+function renderModalAusDetalle() {
+  if (!state.ausDetalleFecha) return "";
+  const fecha = state.ausDetalleFecha;
+  const aus = ausDeDia(fecha);
+  const cubierto = (diaData(fecha).asignaciones || []).length > 0;
+  const filas = aus.map(a => {
+    const m = getMedico(a.medicoId); const ti = tipoAus(a.tipo);
+    const rango = a.desde === a.hasta ? `día ${a.desde}` : `días ${a.desde}–${a.hasta}`;
+    return `<div style="padding:7px 0;border-bottom:1px solid #eee;font-size:0.82rem">
+      <div style="font-weight:600;color:#111827">${ti.emoji} ${m ? escHTML(m.nombre) : "—"} · <span style="color:${ti.color}">${ti.label}</span></div>
+      <div style="font-size:0.72rem;color:#6b7280">${MESES[state.mes]} · ${rango}${a.motivo ? " · motivo: " + escHTML(a.motivo) : ""}</div>
+    </div>`;
+  }).join("");
+  return `<div class="modal-bg" onclick="if(event.target===this)cerrarAusDetalle()">
+    <div class="modal-box" style="max-width:420px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">Ausencias — día ${dnum(fecha)}</div>
+        <button onclick="cerrarAusDetalle()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+      </div>
+      ${!cubierto ? `<div style="background:#fef2f2;border:1px solid #dc2626;border-radius:7px;padding:8px 11px;margin-bottom:10px;font-size:0.78rem;color:#b91c1c;font-weight:600">⚠️ Este día tiene una ausencia y no hay médico de reemplazo asignado.</div>` : ""}
+      ${filas}
     </div>
   </div>`;
 }
