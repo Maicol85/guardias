@@ -344,7 +344,7 @@ function aplicarPatronMes(anio, mes) {
   const total = new Date(anio, mes + 1, 0).getDate();
   for (let d = 1; d <= total; d++) {
     const f = `${anio}-${String(mes + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    const dow = new Date(f + "T00:00:00").getDay();
+    const dow = new Date(anio, mes, d).getDay();
     const patron = PATRON_SEMANAL[dow] || [];
     cal[f].asignaciones = patron.map((a, i) => ({ ...a, id: Date.now() + d * 100 + i }));
   }
@@ -439,7 +439,8 @@ function renderCeldaDia(fecha) {
   const dia = Number(fecha.split("-")[2]);
   const hoy = new Date().toISOString().split("T")[0];
   const esHoy = fecha === hoy;
-  const esFinde = [0,6].includes(new Date(fecha).getDay());
+  const [_y,_m,_d] = fecha.split("-").map(Number);
+  const esFinde = [0,6].includes(new Date(_y, _m-1, _d).getDay());
   const sinCubrirDia = data.asignaciones.length === 0;
 
   const asigsFiltradas = state.filtroMedico
@@ -465,8 +466,14 @@ function renderCeldaDia(fecha) {
     : "";
 
   // MEJORA 1/4: resaltar día origen cuando se está copiando o intercambiando
-  const copiaStyle = (state.copiarDiaOrigen === fecha) ? ";outline:3px solid #2563eb;outline-offset:-3px;background:#eff6ff"
-    : (state.swapDiaOrigen === fecha) ? ";outline:3px solid #16a34a;outline-offset:-3px;background:#f0fdf4" : "";
+  // En modo swap: origen en verde sólido, destinos posibles en borde punteado naranja con cursor especial
+  const esSwapOrigen = state.swapDiaOrigen === fecha;
+  const esSwapDestino = state.swapDiaOrigen && state.swapDiaOrigen !== fecha;
+  const esCopyOrigen = state.copiarDiaOrigen === fecha;
+  const copiaStyle = esCopyOrigen ? ";outline:3px solid #2563eb;outline-offset:-3px;background:#eff6ff"
+    : esSwapOrigen ? ";outline:3px solid #16a34a;outline-offset:-3px;background:#f0fdf4"
+    : esSwapDestino ? ";outline:2px dashed #ea580c;outline-offset:-2px;cursor:crosshair"
+    : "";
   // Ausencias: alerta destacada si hay ausencia sin médico de reemplazo
   const ausAlerta = diaAusSinCubrir(fecha) ? ";box-shadow:inset 0 0 0 2px #dc2626" : "";
 
@@ -492,7 +499,9 @@ function renderAvatar(m, size=28) {
 // ─── RENDER CALENDARIO ───────────────────────────────────────
 function renderCalendario() {
   const totalDias = new Date(state.anio, state.mes+1, 0).getDate();
-  const primerDia = new Date(state.anio, state.mes, 1).getDay();
+  // Convertir a base-lunes: JS getDay() devuelve 0=Dom,1=Lun,...,6=Sáb
+  // El header empieza en Lunes, entonces: Dom→6, Lun→0, Mar→1 ... Sáb→5
+  const primerDia = (new Date(state.anio, state.mes, 1).getDay() + 6) % 7;
   const sc = sinCubrir();
 
   // Leyenda
@@ -579,13 +588,20 @@ function renderCalendario() {
       </div>
     </div>
 
-    ${state.copiarDiaOrigen ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#eff6ff;border:1px solid #2563eb;border-radius:8px;padding:8px 14px;margin-bottom:10px">
-      <span style="font-size:0.82rem;color:#1e40af;font-weight:600">📋 Copiando el día ${dnum(state.copiarDiaOrigen)} — hacé clic en el día destino</span>
-      <button class="btn btn-secondary btn-sm" onclick="cancelarCopiarDia()">Cancelar</button>
+    ${state.copiarDiaOrigen ? `<div style="background:#eff6ff;border:1px solid #2563eb;border-radius:8px;padding:10px 14px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
+        <span style="font-size:0.82rem;color:#1e40af;font-weight:600">📋 Día ${dnum(state.copiarDiaOrigen)} copiado — clic en un día para pegar ahí, o usá los botones:</span>
+        <button class="btn btn-secondary btn-sm" onclick="cancelarCopiarDia()">Cancelar</button>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <span style="font-size:0.72rem;font-weight:700;color:#4b5563;text-transform:uppercase;letter-spacing:.5px">Pegar en todos los:</span>
+        ${["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"].map((d,i) => `<button class="btn btn-secondary btn-sm" onclick="pegarEnDiaDeSemana(${i})" style="${i>=5?'color:#b45309;border-color:#b45309':''}">${d}</button>`).join("")}
+        <span style="font-size:0.72rem;color:#6b7280;margin-left:4px">del mes</span>
+      </div>
     </div>` : ""}
-    ${state.swapDiaOrigen ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#f0fdf4;border:1px solid #16a34a;border-radius:8px;padding:8px 14px;margin-bottom:10px">
-      <span style="font-size:0.82rem;color:#166534;font-weight:600">🔄 Intercambiando el día ${dnum(state.swapDiaOrigen)} — hacé clic en el otro día</span>
-      <button class="btn btn-secondary btn-sm" onclick="cancelarSwapDia()">Cancelar</button>
+    ${state.swapDiaOrigen ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#f0fdf4;border:2px solid #16a34a;border-radius:8px;padding:10px 14px;margin-bottom:10px">
+      <span style="font-size:0.85rem;color:#166534;font-weight:700">🔄 Modo intercambio activo — Día ${dnum(state.swapDiaOrigen)} seleccionado &nbsp;→&nbsp; hacé clic directo en el día destino del calendario</span>
+      <button class="btn btn-secondary btn-sm" onclick="cancelarSwapDia()">✕ Cancelar</button>
     </div>` : ""}
     <div class="nota-mes-wrap">${notaMesHTML}</div>
     <div class="leyenda">${leyendaHTML}</div>
@@ -682,7 +698,8 @@ function renderModalDia() {
   const fecha = state.modalDia;
   const data = diaData(fecha);
   const dia = Number(fecha.split("-")[2]);
-  const nombreDia = DIAS_FULL[new Date(fecha).getDay()];
+  const [__y,__m,__d] = fecha.split("-").map(Number);
+  const nombreDia = DIAS_FULL[new Date(__y, __m-1, __d).getDay()];
 
   const opsMedico = medicos.map(m => `<option value="${m.id}">${m.sigla} — ${m.nombre}</option>`).join("");
 
@@ -1060,33 +1077,14 @@ function irAMes(anioNuevo, mesNuevo) {
 }
 
 function aplicarCopia(copiar) {
-  const {anioNuevo, mesNuevo, anioOrigen, mesOrigen} = state.modalCopiar;
-  const calBase = state.historialMeses[`${anioOrigen}-${mesOrigen}`];
-  const calNuevo = generarMesVacio(anioNuevo, mesNuevo);
+  const {anioNuevo, mesNuevo} = state.modalCopiar;
 
-  if(copiar && calBase) {
-    const plantilla = {};
-    Object.entries(calBase).forEach(([fecha,data]) => {
-      if(!data.asignaciones?.length) return;
-      const ds = new Date(fecha).getDay();
-      if(!plantilla[ds]) plantilla[ds] = [];
-      plantilla[ds].push(data.asignaciones);
-    });
-
-    const contador = {};
-    const total = new Date(anioNuevo, mesNuevo+1, 0).getDate();
-    for(let d=1; d<=total; d++) {
-      const f = `${anioNuevo}-${String(mesNuevo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-      const ds = new Date(anioNuevo, mesNuevo, d).getDay();
-      if(!contador[ds]) contador[ds] = 0;
-      const idx = contador[ds];
-      contador[ds]++;
-      const p = plantilla[ds];
-      if(p?.length > 0) {
-        calNuevo[f] = { asignaciones:[...p[idx % p.length]], notas:"" };
-      }
-    }
-  }
+  // El patrón es fijo por día de semana: el martes siempre tiene los mismos médicos,
+  // sin importar en qué día arranca el mes ni cuántos días tiene.
+  // La lógica anterior rotaba semanas del mes anterior generando corrimientos.
+  const calNuevo = copiar
+    ? aplicarPatronMes(anioNuevo, mesNuevo)
+    : generarMesVacio(anioNuevo, mesNuevo);
 
   state.calendario = calNuevo;
   state.notaMes = "";
@@ -1198,6 +1196,37 @@ function copiarDiaDestino(destino) {
   histLog(destino, `📋 Copiado desde el día ${dnum(origen)} (${clon.length} médico/s)`, motivo);   // MEJORA 5
   guardarEstado();
   render();
+}
+
+// ─── PEGAR A TODOS LOS DÍA-DE-SEMANA DEL MES ─────────────────
+// dow: 0=Lun, 1=Mar, 2=Mié, 3=Jue, 4=Vie, 5=Sáb, 6=Dom (base-lunes)
+function pegarEnDiaDeSemana(dow) {
+  const origen = state.copiarDiaOrigen;
+  if (!origen) return;
+  const dOrig = diaData(origen);
+  if (!dOrig.asignaciones || !dOrig.asignaciones.length) {
+    alert("El día copiado no tiene asignaciones.");
+    return;
+  }
+  const diasSemana = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábados","Domingos"];
+  const totalDias = new Date(state.anio, state.mes + 1, 0).getDate();
+  let cuenta = 0;
+  for (let d = 1; d <= totalDias; d++) {
+    const fecha = `${state.anio}-${String(state.mes + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const [_pw,_pm,_pd] = fecha.split("-").map(Number);
+    const dowFecha = (new Date(_pw, _pm-1, _pd).getDay() + 6) % 7; // base-lunes
+    if (dowFecha !== dow) continue;
+    if (fecha === origen) continue; // no pisarse a sí mismo
+    const clon = dOrig.asignaciones.map((a, i) => { const c = { ...a }; delete c.uid; c.id = Date.now() + d * 100 + i; return c; });
+    if (!state.calendario[fecha]) state.calendario[fecha] = { asignaciones: [], notas: "" };
+    state.calendario[fecha].asignaciones = clon;
+    histLog(fecha, `📋 Copiado desde día ${dnum(origen)} (pegar a todos los ${diasSemana[dow]})`, "");
+    cuenta++;
+  }
+  guardarEstado();
+  render();
+  // Mantener el portapapeles activo para seguir pegando en otros días de semana
+  // alert ya da feedback suficiente; no cancelamos copiarDiaOrigen para que pueda pegar en otro dow
 }
 
 // ─── MEJORA 2: DRAG & DROP DE MÉDICO ENTRE DÍAS ──────────────
@@ -1422,7 +1451,8 @@ function resumenHoras() {
 
 // ─── MEJORA 8: VISTA SEMANAL ─────────────────────────────────
 function semanaDeFecha(fecha) {
-  const d = new Date(fecha + "T00:00:00");
+  const [_sf_y,_sf_m,_sf_d] = fecha.split("-").map(Number);
+  const d = new Date(_sf_y, _sf_m-1, _sf_d);
   const dow = (d.getDay() + 6) % 7;   // 0 = lunes
   const lunes = new Date(d); lunes.setDate(d.getDate() - dow);
   const dias = [];
@@ -1446,7 +1476,8 @@ function toggleVista() {
   render();
 }
 function moverSemana(dir) {
-  const d = new Date(anclaSemana() + "T00:00:00");
+  const _anc = anclaSemana(); const [_ms_y,_ms_m,_ms_d] = _anc.split("-").map(Number);
+  const d = new Date(_ms_y, _ms_m-1, _ms_d);
   d.setDate(d.getDate() + dir * 7);
   state.semanaAncla = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   // sincronizar mes/año mostrados con la semana
@@ -1491,7 +1522,7 @@ function quitarMedico(id) {
 // ─── EXPORTAR PDF ────────────────────────────────────────────
 function exportarPDF() {
   const totalD = new Date(state.anio, state.mes+1, 0).getDate();
-  const primerD = new Date(state.anio, state.mes, 1).getDay();
+  const primerD = (new Date(state.anio, state.mes, 1).getDay() + 6) % 7; // base-lunes
   const notas = cargarNotasMes();
 
   const celdaHTML = (fecha) => {
