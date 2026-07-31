@@ -245,6 +245,7 @@ let state = {
   addMedico: "",
   addRol: "D12",
   editHorario: null,
+  copiarDiaOrigen: null,
   nuevoMedico: { nombre:"", sigla:"", color:"#1d4ed8" },
 };
 
@@ -384,30 +385,51 @@ function getStats() {
 }
 
 // ─── ORDEN DE ASIGNACIONES (CAMBIO 1) ────────────────────────
+// Hora de entrada: solo si el horario es un rango tipo "8-20", "08–20 hs", "07-19hs".
+// Los turnos sin rango (Apoyo 6hs, Policlínica, Interno) devuelven null y van después.
+function horaInicioDe(a) {
+  const m = String(horarioDe(a)).match(/(\d{1,2})\s*[-–—]\s*\d{1,2}/);
+  return m ? parseInt(m[1], 10) : null;
+}
+// Clave de orden: diurnos primero (por hora de inicio), luego nocturnos, luego sin-hora (apoyo/especial).
+function claveOrden(a) {
+  const h = horaInicioDe(a);
+  if (h == null) return [2, (ROL_ORDEN[a.rol] !== undefined ? ROL_ORDEN[a.rol] : 99)];
+  const nocturno = (h >= 19 || h < 6);
+  const eff = nocturno ? (h < 6 ? h + 24 : h) : h;   // 19,20,22,24(=0),26(=2)…
+  return [nocturno ? 1 : 0, eff];
+}
+// MEJORA 3: ordenar automáticamente por horario (hora de entrada): diurnos, luego nocturnos.
 function ordenarAsignaciones(asigs) {
   return [...asigs].sort((a, b) => {
-    const oa = ROL_ORDEN[a.rol] !== undefined ? ROL_ORDEN[a.rol] : 2;
-    const ob = ROL_ORDEN[b.rol] !== undefined ? ROL_ORDEN[b.rol] : 2;
-    return oa - ob;
+    const ka = claveOrden(a), kb = claveOrden(b);
+    return (ka[0] - kb[0]) || (ka[1] - kb[1]);
   });
+}
+// uid estable para drag & drop (se persiste como campo interno de la asignación).
+function asigUid(a) {
+  if (!a.uid) a.uid = "u" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  return a.uid;
 }
 
 // ─── RENDER ASIGNACIÓN EN CELDA (CAMBIOS 2 y 3) ──────────────
-function renderAsigCelda(a) {
+function renderAsigCelda(a, fecha) {
   const m = getMedico(a.medicoId);
   const rol = getRol(a.rol);
   if(!m) return "";
   const esApoyo = a.rol !== "D12" && a.rol !== "N12";
+  // MEJORA 2: cada médico es arrastrable entre días
+  const dragAttrs = `draggable="true" ondragstart="dragStartMed(event,'${fecha}','${asigUid(a)}')" ondragend="dragEndMed(event)"`;
 
   if(esApoyo) {
     // Apoyo: mantiene color del rol
-    return `<div class="asig-row apoyo" style="--rol-color:${rol.color};--rol-bg:${rol.bg};border-left-color:${rol.color};background:${rol.bg}">
+    return `<div class="asig-row apoyo" ${dragAttrs} style="--rol-color:${rol.color};--rol-bg:${rol.bg};border-left-color:${rol.color};background:${rol.bg};cursor:grab">
       <div class="asig-rol-label" style="color:${rol.color}">${escHTML(horarioDe(a))}</div>
       <div class="asig-nombre apoyo-nombre" style="color:${rol.color}">${m.nombre}</div>
     </div>`;
   } else {
     // CAMBIO 2+3: guardia en gris neutro, con horario al lado del nombre
-    return `<div class="asig-row guardia">
+    return `<div class="asig-row guardia" ${dragAttrs} style="cursor:grab">
       <div class="asig-nombre">${m.nombre}<span class="horario">· ${escHTML(horarioDe(a))}</span></div>
     </div>`;
   }
@@ -439,12 +461,16 @@ function renderCeldaDia(fecha) {
   if(esHoy) numClases += " hoy";
   else if(esFinde) numClases += " finde";
 
-  const asigHTML = asigsOrdenadas.map(renderAsigCelda).join("");
+  const asigHTML = asigsOrdenadas.map(a => renderAsigCelda(a, fecha)).join("");
   const sinCubrirHTML = sinCubrirDia && !state.filtroMedico
     ? `<div class="asig-sin-cubrir"><span style="font-size:0.6rem;color:#b91c1c;font-weight:600">Sin cubrir</span></div>`
     : "";
 
-  return `<div id="cell-${fecha}" class="${clases}" style="opacity:${opacidad}" onclick="abrirModalDia('${fecha}')">
+  // MEJORA 1: resaltar día origen cuando se está copiando
+  const esOrigenCopia = state.copiarDiaOrigen === fecha;
+  const copiaStyle = esOrigenCopia ? ";outline:3px solid #2563eb;outline-offset:-3px;background:#eff6ff" : "";
+
+  return `<div id="cell-${fecha}" class="${clases}" style="opacity:${opacidad}${copiaStyle}" onclick="clickDia('${fecha}')" ondragover="permitirDrop(event)" ondragleave="salirDrop(event)" ondrop="soltarMedico(event,'${fecha}')">
     <div class="cal-num-wrap">
       <span class="${numClases}">${dia}</span>
       <div class="cal-flags">
@@ -534,6 +560,10 @@ function renderCalendario() {
       </div>
     </div>
 
+    ${state.copiarDiaOrigen ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#eff6ff;border:1px solid #2563eb;border-radius:8px;padding:8px 14px;margin-bottom:10px">
+      <span style="font-size:0.82rem;color:#1e40af;font-weight:600">📋 Copiando el día ${Number(state.copiarDiaOrigen.split("-")[2])} — hacé clic en el día destino</span>
+      <button class="btn btn-secondary btn-sm" onclick="cancelarCopiarDia()">Cancelar</button>
+    </div>` : ""}
     <div class="nota-mes-wrap">${notaMesHTML}</div>
     <div class="leyenda">${leyendaHTML}</div>
 
@@ -683,6 +713,10 @@ function renderModalDia() {
           </div>
         </div>
         <button class="btn btn-primary btn-full" onclick="agregarAsignacionModal('${fecha}')">+ Agregar al día</button>
+      </div>
+
+      <div style="border-top:1px solid #d1d5db;padding-top:14px;margin-bottom:14px">
+        <button class="btn btn-secondary btn-full" onclick="iniciarCopiarDia('${fecha}')">📋 Copiar día a otro día</button>
       </div>
 
       <div style="border-top:1px solid #d1d5db;padding-top:14px">
@@ -949,6 +983,78 @@ function guardarHorario(fecha, ai, valor) {
 }
 function cancelEditHorario() {
   state.editHorario = null;
+  render();
+}
+
+// ─── MEJORA 1: COPIAR DÍA A OTRO DÍA ─────────────────────────
+function iniciarCopiarDia(fecha) {
+  state.copiarDiaOrigen = fecha;
+  state.modalDia = null;   // cerrar modal para elegir destino en el calendario
+  render();
+}
+function cancelarCopiarDia() {
+  state.copiarDiaOrigen = null;
+  render();
+}
+function clickDia(fecha) {
+  if (state.copiarDiaOrigen) {
+    if (fecha === state.copiarDiaOrigen) { cancelarCopiarDia(); return; }  // clic en el origen = cancelar
+    copiarDiaDestino(fecha);
+    return;
+  }
+  abrirModalDia(fecha);
+}
+function copiarDiaDestino(destino) {
+  const origen = state.copiarDiaOrigen;
+  const dOrig = diaData(origen);
+  const clon = (dOrig.asignaciones || []).map((a, i) => {
+    const c = { ...a };
+    delete c.uid;                       // uid nuevo para cada copia
+    c.id = Date.now() + i;
+    return c;
+  });
+  if (!state.calendario[destino]) state.calendario[destino] = { asignaciones: [], notas: "" };
+  const dDest = state.calendario[destino];
+  if (dDest.asignaciones && dDest.asignaciones.length > 0) {
+    if (!confirm(`El día ${Number(destino.split("-")[2])} ya tiene ${dDest.asignaciones.length} médico(s). ¿Sobrescribir con las asignaciones del día ${Number(origen.split("-")[2])}?`)) return;
+  }
+  dDest.asignaciones = clon;
+  state.copiarDiaOrigen = null;
+  guardarEstado();
+  render();
+}
+
+// ─── MEJORA 2: DRAG & DROP DE MÉDICO ENTRE DÍAS ──────────────
+function dragStartMed(ev, fecha, uid) {
+  ev.dataTransfer.effectAllowed = "move";
+  ev.dataTransfer.setData("text/plain", JSON.stringify({ fecha, uid }));
+  if (ev.currentTarget && ev.currentTarget.style) ev.currentTarget.style.opacity = "0.4";
+}
+function dragEndMed(ev) {
+  if (ev.currentTarget && ev.currentTarget.style) ev.currentTarget.style.opacity = "";
+}
+function permitirDrop(ev) {
+  ev.preventDefault();
+  const cell = ev.currentTarget;
+  if (cell && cell.style) { cell.style.outline = "2px dashed #2563eb"; cell.style.outlineOffset = "-2px"; }
+}
+function salirDrop(ev) {
+  const cell = ev.currentTarget;
+  if (cell && cell.style && !(state.copiarDiaOrigen === cell.id.replace("cell-", ""))) cell.style.outline = "";
+}
+function soltarMedico(ev, destino) {
+  ev.preventDefault();
+  const cell = ev.currentTarget; if (cell && cell.style) cell.style.outline = "";
+  let payload; try { payload = JSON.parse(ev.dataTransfer.getData("text/plain")); } catch (e) { return; }
+  const { fecha: origen, uid } = payload || {};
+  if (!origen || origen === destino) return;
+  const dOrig = diaData(origen);
+  const idx = (dOrig.asignaciones || []).findIndex(a => a.uid === uid);
+  if (idx < 0) return;
+  const [asig] = dOrig.asignaciones.splice(idx, 1);   // mantiene rol, horario y demás campos
+  if (!state.calendario[destino]) state.calendario[destino] = { asignaciones: [], notas: "" };
+  state.calendario[destino].asignaciones.push(asig);
+  guardarEstado();
   render();
 }
 
