@@ -250,6 +250,7 @@ let state = {
   modoCal: "mes",       // "mes" | "semana"
   semanaAncla: null,    // fecha ancla de la vista semanal
   histModal: null,      // fecha cuyo historial se muestra
+  jefe: (function(){ try { return sessionStorage.getItem("guardias_jefe") === "1"; } catch(e){ return false; } })(),  // MEJORA 13
   nuevoMedico: { nombre:"", sigla:"", color:"#1d4ed8" },
 };
 
@@ -422,20 +423,21 @@ function renderAsigCelda(a, fecha) {
   const rol = getRol(a.rol);
   if(!m) return "";
   const esApoyo = a.rol !== "D12" && a.rol !== "N12";
-  // MEJORA 2: cada médico es arrastrable entre días
-  const dragAttrs = `draggable="true" ondragstart="dragStartMed(event,'${fecha}','${asigUid(a)}')" ondragend="dragEndMed(event)"`;
+  // MEJORA 2: cada médico es arrastrable entre días (solo en modo jefe)
+  const dragAttrs = state.jefe ? `draggable="true" ondragstart="dragStartMed(event,'${fecha}','${asigUid(a)}')" ondragend="dragEndMed(event)"` : "";
+  const grab = state.jefe ? "cursor:grab" : "default";
   // MEJORA 7: badge de estado (emoji) reflejado en la celda
   const badge = `<span title="${estadoLabel(estadoDe(a))}" style="font-size:0.6rem;margin-right:1px">${estadoEmoji(estadoDe(a))}</span>`;
 
   if(esApoyo) {
     // Apoyo: mantiene color del rol
-    return `<div class="asig-row apoyo" ${dragAttrs} style="--rol-color:${rol.color};--rol-bg:${rol.bg};border-left-color:${rol.color};background:${rol.bg};cursor:grab">
+    return `<div class="asig-row apoyo" ${dragAttrs} style="--rol-color:${rol.color};--rol-bg:${rol.bg};border-left-color:${rol.color};background:${rol.bg};${grab}">
       <div class="asig-rol-label" style="color:${rol.color}">${escHTML(horarioDe(a))}</div>
       <div class="asig-nombre apoyo-nombre" style="color:${rol.color}">${badge}${m.nombre}</div>
     </div>`;
   } else {
     // CAMBIO 2+3: guardia en gris neutro, con horario al lado del nombre
-    return `<div class="asig-row guardia" ${dragAttrs} style="cursor:grab">
+    return `<div class="asig-row guardia" ${dragAttrs} style="${grab}">
       <div class="asig-nombre">${badge}${m.nombre}<span class="horario">· ${escHTML(horarioDe(a))}</span></div>
     </div>`;
   }
@@ -547,15 +549,15 @@ function renderCalendario() {
   }
 
   // Nota mes
-  const notaMesHTML = state.editNotaMes
+  const notaMesHTML = (state.jefe && state.editNotaMes)
     ? `<div class="nota-mes-edit">
         <input value="${state.notaMes}" oninput="state.notaMes=this.value" placeholder="Nota para este mes..." style="flex:1;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.83rem">
         <button class="btn btn-secondary btn-sm" onclick="state.editNotaMes=false;render()">Guardar</button>
        </div>`
-    : `<div class="nota-mes-display" onclick="state.editNotaMes=true;render()">
+    : `<div class="nota-mes-display" ${state.jefe ? `onclick="state.editNotaMes=true;render()"` : ""}>
         <span style="font-size:0.75rem">📌</span>
-        <span style="font-size:0.8rem;color:#b45309;font-weight:500">${state.notaMes || "Agregar nota del mes..."}</span>
-        <span style="font-size:0.7rem;color:#6b7280;margin-left:4px">✎</span>
+        <span style="font-size:0.8rem;color:#b45309;font-weight:500">${state.notaMes || (state.jefe ? "Agregar nota del mes..." : "—")}</span>
+        ${state.jefe ? `<span style="font-size:0.7rem;color:#6b7280;margin-left:4px">✎</span>` : ""}
        </div>`;
 
   return `
@@ -574,9 +576,13 @@ function renderCalendario() {
           ${opsMedico}
         </select>
         <button class="btn btn-secondary btn-sm" onclick="exportarPDF()">📄 Exportar PDF</button>
+        ${state.jefe ? `
+        <button class="btn btn-secondary btn-sm" onclick="guardarPlantilla()" title="Guardar el patrón de este mes como plantilla">💾 Guardar plantilla</button>
+        <button class="btn btn-secondary btn-sm" onclick="aplicarPlantilla()" title="Aplicar la plantilla guardada a este mes">📂 Aplicar plantilla</button>
         <button class="btn btn-secondary btn-sm" onclick="exportarMesJSON()">📤 Exportar mes</button>
         <button class="btn btn-secondary btn-sm" onclick="document.getElementById('import-json-input').click()">📥 Importar mes</button>
         <input type="file" id="import-json-input" accept="application/json,.json" style="display:none" onchange="importarMesJSON(event)">
+        ` : ""}
       </div>
     </div>
 
@@ -602,7 +608,7 @@ function renderCalendario() {
 
     <div class="notas-panel">
       <div class="notas-panel-title">📝 Notas del mes</div>
-      <textarea rows="4" placeholder="Escribí notas, recordatorios o comentarios para ${MESES[state.mes]} ${state.anio}..." oninput="guardarNotasMes(this.value)">${escHTML(cargarNotasMes())}</textarea>
+      <textarea rows="4" ${state.jefe ? "" : "readonly"} placeholder="Escribí notas, recordatorios o comentarios para ${MESES[state.mes]} ${state.anio}..." oninput="guardarNotasMes(this.value)">${escHTML(cargarNotasMes())}</textarea>
     </div>`;
 }
 
@@ -870,16 +876,19 @@ function render() {
         </div>
         <div style="display:flex;gap:8px;align-items:center">
           ${sc > 0 ? `<div class="badge-alerta" style="cursor:pointer" title="Ir al primer día sin cubrir" onclick="irPrimerSinCubrir()">⚠️ ${sc} día${sc!==1?"s":""} sin cubrir</div>` : ""}
+          ${state.jefe
+            ? `<button class="btn btn-secondary btn-sm" onclick="cerrarSesionJefe()" title="Volver a modo solo lectura">🔓 Cerrar sesión</button>`
+            : `<button class="btn btn-secondary btn-sm" onclick="activarJefe()" title="Acceso de jefe (edición)" style="opacity:.75">🔒</button>`}
         </div>
       </div>
 
-      <div class="nav">
+      ${state.jefe ? `<div class="nav">
         ${[
           {id:"calendario", icon:"📅", label:"Calendario"},
           {id:"equipo",     icon:"👥", label:"Equipo"},
           {id:"estadisticas",icon:"📊", label:"Estadísticas"},
         ].map(n => `<button class="nav-btn ${state.view===n.id?'active':''}" onclick="setView('${n.id}')">${n.icon} ${n.label}</button>`).join("")}
-      </div>
+      </div>` : ""}
 
       <div class="main">${contenido}</div>
 
@@ -898,6 +907,60 @@ function render() {
 // ─── ACCIONES ────────────────────────────────────────────────
 
 function setView(v) { state.view = v; render(); }
+
+// ─── MEJORA 13: MODO SOLO LECTURA / JEFE ─────────────────────
+function activarJefe() {
+  const c = prompt("Contraseña de jefe:");
+  if (c == null) return;
+  if (c === "emergencia") {
+    try { sessionStorage.setItem("guardias_jefe", "1"); } catch(e) {}
+    state.jefe = true; render();
+  } else { alert("Contraseña incorrecta."); }
+}
+function cerrarSesionJefe() {
+  try { sessionStorage.removeItem("guardias_jefe"); } catch(e) {}
+  state.jefe = false; state.view = "calendario"; state.modalDia = null;
+  state.copiarDiaOrigen = null; state.swapDiaOrigen = null;
+  render();
+}
+
+// ─── MEJORA 11: PLANTILLA MENSUAL ────────────────────────────
+function guardarPlantilla() {
+  const tpl = {};
+  Object.keys(state.calendario || {}).forEach(f => {
+    const d = state.calendario[f];
+    if (d.asignaciones && d.asignaciones.length) {
+      tpl[dnum(f)] = d.asignaciones.map(a => {
+        const o = { medicoId: a.medicoId, rol: a.rol };   // roles y horarios, no fechas
+        if (a.horario) o.horario = a.horario;
+        if (a.estado) o.estado = a.estado;
+        return o;
+      });
+    }
+  });
+  if (!Object.keys(tpl).length) { alert("El mes actual no tiene guardias para guardar como plantilla."); return; }
+  try { localStorage.setItem("guardias_plantilla", JSON.stringify(tpl)); } catch(e) {}
+  alert("Plantilla guardada (" + Object.keys(tpl).length + " días con guardias).");
+}
+function aplicarPlantilla() {
+  let tpl; try { tpl = JSON.parse(localStorage.getItem("guardias_plantilla")); } catch(e) {}
+  if (!tpl || !Object.keys(tpl).length) { alert("No hay ninguna plantilla guardada todavía."); return; }
+  const tieneDatos = Object.values(state.calendario || {}).some(d => d.asignaciones && d.asignaciones.length);
+  if (tieneDatos && !confirm("Este mes ya tiene guardias cargadas. ¿Aplicar la plantilla igual? (sobrescribe los días incluidos en la plantilla)")) return;
+  const total = new Date(state.anio, state.mes + 1, 0).getDate();
+  let aplicados = 0;
+  Object.keys(tpl).forEach(dn => {
+    const d = parseInt(dn, 10);
+    if (d < 1 || d > total) return;
+    const f = `${state.anio}-${String(state.mes + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    if (!state.calendario[f]) state.calendario[f] = { asignaciones: [], notas: "" };
+    state.calendario[f].asignaciones = tpl[dn].map((a, i) => ({ ...a, id: Date.now() + i }));
+    aplicados++;
+  });
+  guardarEstado();
+  render();
+  alert("Plantilla aplicada a " + aplicados + " día(s).");
+}
 
 function irHoy() {
   const hoy = new Date();
@@ -1051,6 +1114,7 @@ function cancelarCopiarDia() {
   render();
 }
 function clickDia(fecha) {
+  if (!state.jefe) return;   // MEJORA 13: solo lectura no abre edición
   if (state.copiarDiaOrigen) {
     if (fecha === state.copiarDiaOrigen) { cancelarCopiarDia(); return; }  // clic en el origen = cancelar
     copiarDiaDestino(fecha);
