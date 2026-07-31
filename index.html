@@ -246,6 +246,10 @@ let state = {
   addRol: "D12",
   editHorario: null,
   copiarDiaOrigen: null,
+  swapDiaOrigen: null,
+  modoCal: "mes",       // "mes" | "semana"
+  semanaAncla: null,    // fecha ancla de la vista semanal
+  histModal: null,      // fecha cuyo historial se muestra
   nuevoMedico: { nombre:"", sigla:"", color:"#1d4ed8" },
 };
 
@@ -420,17 +424,19 @@ function renderAsigCelda(a, fecha) {
   const esApoyo = a.rol !== "D12" && a.rol !== "N12";
   // MEJORA 2: cada médico es arrastrable entre días
   const dragAttrs = `draggable="true" ondragstart="dragStartMed(event,'${fecha}','${asigUid(a)}')" ondragend="dragEndMed(event)"`;
+  // MEJORA 7: badge de estado (emoji) reflejado en la celda
+  const badge = `<span title="${estadoLabel(estadoDe(a))}" style="font-size:0.6rem;margin-right:1px">${estadoEmoji(estadoDe(a))}</span>`;
 
   if(esApoyo) {
     // Apoyo: mantiene color del rol
     return `<div class="asig-row apoyo" ${dragAttrs} style="--rol-color:${rol.color};--rol-bg:${rol.bg};border-left-color:${rol.color};background:${rol.bg};cursor:grab">
       <div class="asig-rol-label" style="color:${rol.color}">${escHTML(horarioDe(a))}</div>
-      <div class="asig-nombre apoyo-nombre" style="color:${rol.color}">${m.nombre}</div>
+      <div class="asig-nombre apoyo-nombre" style="color:${rol.color}">${badge}${m.nombre}</div>
     </div>`;
   } else {
     // CAMBIO 2+3: guardia en gris neutro, con horario al lado del nombre
     return `<div class="asig-row guardia" ${dragAttrs} style="cursor:grab">
-      <div class="asig-nombre">${m.nombre}<span class="horario">· ${escHTML(horarioDe(a))}</span></div>
+      <div class="asig-nombre">${badge}${m.nombre}<span class="horario">· ${escHTML(horarioDe(a))}</span></div>
     </div>`;
   }
 }
@@ -466,15 +472,16 @@ function renderCeldaDia(fecha) {
     ? `<div class="asig-sin-cubrir"><span style="font-size:0.6rem;color:#b91c1c;font-weight:600">Sin cubrir</span></div>`
     : "";
 
-  // MEJORA 1: resaltar día origen cuando se está copiando
-  const esOrigenCopia = state.copiarDiaOrigen === fecha;
-  const copiaStyle = esOrigenCopia ? ";outline:3px solid #2563eb;outline-offset:-3px;background:#eff6ff" : "";
+  // MEJORA 1/4: resaltar día origen cuando se está copiando o intercambiando
+  const copiaStyle = (state.copiarDiaOrigen === fecha) ? ";outline:3px solid #2563eb;outline-offset:-3px;background:#eff6ff"
+    : (state.swapDiaOrigen === fecha) ? ";outline:3px solid #16a34a;outline-offset:-3px;background:#f0fdf4" : "";
 
   return `<div id="cell-${fecha}" class="${clases}" style="opacity:${opacidad}${copiaStyle}" onclick="clickDia('${fecha}')" ondragover="permitirDrop(event)" ondragleave="salirDrop(event)" ondrop="soltarMedico(event,'${fecha}')">
     <div class="cal-num-wrap">
       <span class="${numClases}">${dia}</span>
       <div class="cal-flags">
         ${data.notas ? `<span style="font-size:0.55rem;color:#b45309;font-weight:700">📌</span>` : ""}
+        ${histGet(fecha).length ? `<span onclick="abrirHistorial('${fecha}',event)" title="Ver historial de cambios" style="font-size:0.58rem;cursor:pointer">📜</span>` : ""}
         ${sinCubrirDia && !state.filtroMedico ? `<span style="font-size:0.58rem;color:#b91c1c;font-weight:700">!</span>` : ""}
       </div>
     </div>
@@ -527,6 +534,18 @@ function renderCalendario() {
   // Dias semana — empezando en Lunes
   const diasOrden = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
 
+  // MEJORA 8: título y contenido según modo (mensual/semanal)
+  let tituloCal, gridInner, gridStyle = "";
+  if (state.modoCal === "semana") {
+    const diasSem = semanaDeFecha(anclaSemana());
+    tituloCal = `Semana ${dnum(diasSem[0])}–${dnum(diasSem[6])} · ${MESES[state.mes]} ${state.anio}`;
+    gridInner = diasSem.map(f => renderCeldaDia(f)).join("");
+    gridStyle = "grid-auto-rows:minmax(300px,auto)";
+  } else {
+    tituloCal = `${MESES[state.mes]} ${state.anio}`;
+    gridInner = vaciosHTML + diasHTML + rellenoHTML;
+  }
+
   // Nota mes
   const notaMesHTML = state.editNotaMes
     ? `<div class="nota-mes-edit">
@@ -542,10 +561,11 @@ function renderCalendario() {
   return `
     <div class="toolbar">
       <div class="toolbar-left">
-        <button class="btn btn-secondary btn-sm" onclick="prevMes()">‹</button>
-        <span class="mes-titulo">${MESES[state.mes]} ${state.anio}</span>
-        <button class="btn btn-secondary btn-sm" onclick="nextMes()">›</button>
+        <button class="btn btn-secondary btn-sm" onclick="navPrev()">‹</button>
+        <span class="mes-titulo">${tituloCal}</span>
+        <button class="btn btn-secondary btn-sm" onclick="navNext()">›</button>
         <button class="btn btn-secondary btn-sm" onclick="irHoy()">Hoy</button>
+        <button class="btn btn-secondary btn-sm" onclick="toggleVista()">${state.modoCal === "semana" ? "🗓 Vista mensual" : "📅 Vista semanal"}</button>
       </div>
       <div class="toolbar-right">
         ${sc > 0 ? `<div class="badge-alerta" style="cursor:pointer" title="Ir al primer día sin cubrir" onclick="irPrimerSinCubrir()">⚠️ ${sc} día${sc!==1?"s":""} sin cubrir</div>` : ""}
@@ -561,8 +581,12 @@ function renderCalendario() {
     </div>
 
     ${state.copiarDiaOrigen ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#eff6ff;border:1px solid #2563eb;border-radius:8px;padding:8px 14px;margin-bottom:10px">
-      <span style="font-size:0.82rem;color:#1e40af;font-weight:600">📋 Copiando el día ${Number(state.copiarDiaOrigen.split("-")[2])} — hacé clic en el día destino</span>
+      <span style="font-size:0.82rem;color:#1e40af;font-weight:600">📋 Copiando el día ${dnum(state.copiarDiaOrigen)} — hacé clic en el día destino</span>
       <button class="btn btn-secondary btn-sm" onclick="cancelarCopiarDia()">Cancelar</button>
+    </div>` : ""}
+    ${state.swapDiaOrigen ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#f0fdf4;border:1px solid #16a34a;border-radius:8px;padding:8px 14px;margin-bottom:10px">
+      <span style="font-size:0.82rem;color:#166534;font-weight:600">🔄 Intercambiando el día ${dnum(state.swapDiaOrigen)} — hacé clic en el otro día</span>
+      <button class="btn btn-secondary btn-sm" onclick="cancelarSwapDia()">Cancelar</button>
     </div>` : ""}
     <div class="nota-mes-wrap">${notaMesHTML}</div>
     <div class="leyenda">${leyendaHTML}</div>
@@ -571,8 +595,8 @@ function renderCalendario() {
       <div class="cal-header">
         ${diasOrden.map(d => `<div class="cal-dow">${d}</div>`).join("")}
       </div>
-      <div class="cal-grid">
-        ${vaciosHTML}${diasHTML}${rellenoHTML}
+      <div class="cal-grid" style="${gridStyle}">
+        ${gridInner}
       </div>
     </div>
 
@@ -624,6 +648,17 @@ function renderEstadisticas() {
     </div>`;
   }).join("");
 
+  // MEJORA 9: resumen de horas por médico
+  const rh = resumenHoras();
+  const horasFilas = rh.length
+    ? rh.map((x,i) => `<div class="stats-row" style="background:${i%2===0?'#fff':'#fafafa'};display:grid;grid-template-columns:2fr 1fr 1fr 1fr">
+        <div class="stats-td" style="display:flex;align-items:center;gap:8px">${renderAvatar(x.medico,26)}<span style="font-size:0.83rem;font-weight:600;color:#111827">${x.medico.nombre}</span></div>
+        <div class="stats-td" style="text-align:center;font-size:0.83rem">${x.guardias}</div>
+        <div class="stats-td" style="text-align:center;font-size:0.83rem;font-weight:700">${x.horas} h</div>
+        <div class="stats-td" style="text-align:center;font-size:0.83rem;color:#6b7280">${x.promedio.toFixed(1)} h</div>
+      </div>`).join("")
+    : `<div style="padding:14px;text-align:center;color:#6b7280;font-size:0.82rem">Sin guardias cargadas este mes.</div>`;
+
   return `
     <div class="section-title">${MESES[state.mes]} ${state.anio} — Distribución de guardias</div>
     <div class="card-wrap">
@@ -631,6 +666,14 @@ function renderEstadisticas() {
         ${["Médico","Total","☀️ 08-20","🌙 20-08","+ Apoyo"].map(h=>`<div class="stats-th">${h}</div>`).join("")}
       </div>
       ${filasHTML}
+    </div>
+
+    <div class="section-title" style="margin-top:22px">${MESES[state.mes]} ${state.anio} — Resumen de horas por médico</div>
+    <div class="card-wrap">
+      <div class="stats-header" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr">
+        ${["Médico","Guardias","Horas totales","Promedio"].map(h=>`<div class="stats-th">${h}</div>`).join("")}
+      </div>
+      ${horasFilas}
     </div>`;
 }
 
@@ -664,6 +707,7 @@ function renderModalDia() {
             <div style="font-size:0.85rem;font-weight:600;color:#1e293b">${m.nombre}</div>
             <div style="font-size:0.7rem;color:${rol.color};font-weight:600">${escHTML(rol.desc)} — ${horarioHTML}</div>
           </div>
+          <button onclick="cycleEstado('${fecha}',${ai},event)" title="Estado: ${estadoLabel(estadoDe(a))} (click para cambiar)" style="background:transparent;border:1px solid ${rol.color}33;border-radius:5px;padding:3px 7px;cursor:pointer;font-size:0.85rem;margin-right:5px">${estadoEmoji(estadoDe(a))}</button>
           <button onclick="quitarAsignacion('${fecha}',${ai})" style="background:#fef2f2;border:none;color:#b91c1c;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:0.75rem;font-weight:600">Quitar</button>
         </div>`;
       }).join("");
@@ -715,8 +759,9 @@ function renderModalDia() {
         <button class="btn btn-primary btn-full" onclick="agregarAsignacionModal('${fecha}')">+ Agregar al día</button>
       </div>
 
-      <div style="border-top:1px solid #d1d5db;padding-top:14px;margin-bottom:14px">
-        <button class="btn btn-secondary btn-full" onclick="iniciarCopiarDia('${fecha}')">📋 Copiar día a otro día</button>
+      <div style="border-top:1px solid #d1d5db;padding-top:14px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <button class="btn btn-secondary" onclick="iniciarCopiarDia('${fecha}')">📋 Copiar día</button>
+        <button class="btn btn-secondary" onclick="iniciarSwapDia('${fecha}')">🔄 Intercambiar</button>
       </div>
 
       <div style="border-top:1px solid #d1d5db;padding-top:14px">
@@ -843,6 +888,7 @@ function render() {
       ${renderModalDia()}
       ${renderModalCopiar()}
       ${renderModalMedico()}
+      ${renderModalHist()}
     </div>`;
 
   // Restaurar filtro médico
@@ -954,12 +1000,18 @@ function agregarAsignacionModal(fecha) {
   if(!medicoId) return;
   if(!state.calendario[fecha]) state.calendario[fecha] = {asignaciones:[], notas:""};
   state.calendario[fecha].asignaciones.push({medicoId:Number(medicoId), rol, id:Date.now()});
+  const nom = getMedico(medicoId) ? getMedico(medicoId).nombre : "médico";
+  histLog(fecha, `➕ ${nom} agregado (${getRol(rol).desc})`, "");   // MEJORA 5
   guardarEstado();
   render();
 }
 
 function quitarAsignacion(fecha, idx) {
-  state.calendario[fecha].asignaciones.splice(idx, 1);
+  const a = ordenarAsignaciones(diaData(fecha).asignaciones)[idx];
+  const nom = (a && getMedico(a.medicoId)) ? getMedico(a.medicoId).nombre : "médico";
+  const raw = a ? state.calendario[fecha].asignaciones.indexOf(a) : idx;
+  state.calendario[fecha].asignaciones.splice(raw >= 0 ? raw : idx, 1);
+  histLog(fecha, `➖ ${nom} removido`, "");   // MEJORA 5
   guardarEstado();
   render();
 }
@@ -976,6 +1028,8 @@ function guardarHorario(fecha, ai, valor) {
   if (a) {
     const v = String(valor == null ? "" : valor).trim();
     if (v) a.horario = v; else delete a.horario;   // vacío => vuelve al horario del rol
+    const nom = getMedico(a.medicoId) ? getMedico(a.medicoId).nombre : "médico";
+    histLog(fecha, `🕑 Horario de ${nom} → ${horarioDe(a)}`, "");   // MEJORA 5
   }
   state.editHorario = null;
   guardarEstado();   // persiste junto con los demás datos del día (localStorage)
@@ -1002,6 +1056,11 @@ function clickDia(fecha) {
     copiarDiaDestino(fecha);
     return;
   }
+  if (state.swapDiaOrigen) {
+    if (fecha === state.swapDiaOrigen) { cancelarSwapDia(); return; }
+    swapDiaDestino(fecha);
+    return;
+  }
   abrirModalDia(fecha);
 }
 function copiarDiaDestino(destino) {
@@ -1016,10 +1075,12 @@ function copiarDiaDestino(destino) {
   if (!state.calendario[destino]) state.calendario[destino] = { asignaciones: [], notas: "" };
   const dDest = state.calendario[destino];
   if (dDest.asignaciones && dDest.asignaciones.length > 0) {
-    if (!confirm(`El día ${Number(destino.split("-")[2])} ya tiene ${dDest.asignaciones.length} médico(s). ¿Sobrescribir con las asignaciones del día ${Number(origen.split("-")[2])}?`)) return;
+    if (!confirm(`El día ${dnum(destino)} ya tiene ${dDest.asignaciones.length} médico(s). ¿Sobrescribir con las asignaciones del día ${dnum(origen)}?`)) return;
   }
+  const motivo = pedirMotivo();   // MEJORA 6
   dDest.asignaciones = clon;
   state.copiarDiaOrigen = null;
+  histLog(destino, `📋 Copiado desde el día ${dnum(origen)} (${clon.length} médico/s)`, motivo);   // MEJORA 5
   guardarEstado();
   render();
 }
@@ -1051,12 +1112,164 @@ function soltarMedico(ev, destino) {
   const dOrig = diaData(origen);
   const idx = (dOrig.asignaciones || []).findIndex(a => a.uid === uid);
   if (idx < 0) return;
-  const [asig] = dOrig.asignaciones.splice(idx, 1);   // mantiene rol, horario y demás campos
+  const motivo = pedirMotivo();   // MEJORA 6
+  const [asig] = dOrig.asignaciones.splice(idx, 1);   // mantiene rol, horario, estado y demás campos
   if (!state.calendario[destino]) state.calendario[destino] = { asignaciones: [], notas: "" };
   state.calendario[destino].asignaciones.push(asig);
+  const nom = getMedico(asig.medicoId) ? getMedico(asig.medicoId).nombre : "médico";
+  histLog(origen, `➡️ ${nom} movido al día ${dnum(destino)}`, motivo);   // MEJORA 5
+  histLog(destino, `⬅️ ${nom} movido desde el día ${dnum(origen)}`, motivo);
   guardarEstado();
   render();
 }
+
+// ─── HELPERS COMPARTIDOS ─────────────────────────────────────
+function dnum(fecha) { return Number(fecha.split("-")[2]); }
+
+// ─── MEJORA 6: NOTA DE MOTIVO (opcional) ─────────────────────
+function pedirMotivo() {
+  const m = prompt("Motivo del cambio (opcional): ej. permuta, enfermedad, vacaciones");
+  return (m == null) ? "" : m.trim();
+}
+
+// ─── MEJORA 5: HISTORIAL DE CAMBIOS POR DÍA (localStorage) ───
+function histKey(fecha) { return `guardias_hist_${fecha}`; }
+function histGet(fecha) {
+  try { const a = JSON.parse(localStorage.getItem(histKey(fecha))); return Array.isArray(a) ? a : []; }
+  catch (e) { return []; }
+}
+function histLog(fecha, texto, motivo) {
+  try {
+    const arr = histGet(fecha);
+    arr.push({ ts: Date.now(), texto: texto, motivo: motivo || "" });
+    while (arr.length > 60) arr.shift();
+    localStorage.setItem(histKey(fecha), JSON.stringify(arr));
+  } catch (e) {}
+}
+function abrirHistorial(fecha, ev) { if (ev) ev.stopPropagation(); state.histModal = fecha; render(); }
+function cerrarHistorial() { state.histModal = null; render(); }
+function renderModalHist() {
+  if (!state.histModal) return "";
+  const fecha = state.histModal;
+  const arr = histGet(fecha).slice().reverse();
+  const filas = arr.length
+    ? arr.map(h => {
+        const d = new Date(h.ts);
+        const cuando = d.toLocaleDateString("es") + " " + d.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
+        const mot = h.motivo ? ` · <span style="color:#b45309">motivo: ${escHTML(h.motivo)}</span>` : "";
+        return `<div style="padding:7px 0;border-bottom:1px solid #eee;font-size:0.8rem;color:#374151">
+          <div>${escHTML(h.texto)}${mot}</div>
+          <div style="font-size:0.68rem;color:#9ca3af;margin-top:1px">${cuando}</div>
+        </div>`;
+      }).join("")
+    : `<div style="padding:14px;text-align:center;color:#6b7280;font-size:0.82rem">Sin cambios registrados para este día.</div>`;
+  return `<div class="modal-bg" onclick="if(event.target===this)cerrarHistorial()">
+    <div class="modal-box" style="max-width:440px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">📜 Historial — día ${dnum(fecha)}</div>
+        <button onclick="cerrarHistorial()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+      </div>
+      <div style="max-height:50vh;overflow:auto">${filas}</div>
+    </div>
+  </div>`;
+}
+
+// ─── MEJORA 4: INTERCAMBIAR (SWAP) DÍAS ──────────────────────
+function iniciarSwapDia(fecha) { state.swapDiaOrigen = fecha; state.modalDia = null; render(); }
+function cancelarSwapDia() { state.swapDiaOrigen = null; render(); }
+function swapDiaDestino(destino) {
+  const origen = state.swapDiaOrigen;
+  if (!confirm(`¿Intercambiar todas las asignaciones del día ${dnum(origen)} con el día ${dnum(destino)}?`)) return;
+  const motivo = pedirMotivo();
+  if (!state.calendario[origen]) state.calendario[origen] = { asignaciones: [], notas: "" };
+  if (!state.calendario[destino]) state.calendario[destino] = { asignaciones: [], notas: "" };
+  const tmp = state.calendario[origen].asignaciones;
+  state.calendario[origen].asignaciones = state.calendario[destino].asignaciones;
+  state.calendario[destino].asignaciones = tmp;
+  state.swapDiaOrigen = null;
+  histLog(origen, `🔄 Intercambio con día ${dnum(destino)}`, motivo);
+  histLog(destino, `🔄 Intercambio con día ${dnum(origen)}`, motivo);
+  guardarEstado();
+  render();
+}
+
+// ─── MEJORA 7: ESTADO DE GUARDIA POR ASIGNACIÓN ──────────────
+const ESTADOS_GUARDIA = ["confirmado", "pendiente", "sincubrir"];
+function estadoDe(a) { return a && a.estado ? a.estado : "confirmado"; }
+function estadoEmoji(e) { return { confirmado: "🟢", pendiente: "🟡", sincubrir: "🔴" }[e] || "🟢"; }
+function estadoLabel(e) { return { confirmado: "Confirmado", pendiente: "Pendiente de confirmar", sincubrir: "Sin cubrir" }[e] || "Confirmado"; }
+function cycleEstado(fecha, ai, ev) {
+  if (ev) ev.stopPropagation();
+  const a = ordenarAsignaciones(diaData(fecha).asignaciones)[ai];
+  if (!a) return;
+  const next = ESTADOS_GUARDIA[(ESTADOS_GUARDIA.indexOf(estadoDe(a)) + 1) % ESTADOS_GUARDIA.length];
+  a.estado = next;
+  const nom = getMedico(a.medicoId) ? getMedico(a.medicoId).nombre : "médico";
+  histLog(fecha, `Estado de ${nom} → ${estadoLabel(next)}`, "");
+  guardarEstado();
+  render();
+}
+
+// ─── MEJORA 9: HORAS POR MÉDICO ──────────────────────────────
+function durationHoras(a) {
+  const s = String(horarioDe(a));
+  const r = s.match(/(\d{1,2})\s*[-–—]\s*(\d{1,2})/);
+  if (r) { let d = ((+r[2]) - (+r[1]) + 24) % 24; return d === 0 ? 24 : d; }
+  const hm = s.match(/(\d{1,2})\s*h/i);
+  return hm ? (+hm[1]) : 0;
+}
+function resumenHoras() {
+  const acc = {};
+  const cal = state.calendario || {};
+  Object.keys(cal).forEach(fecha => {
+    (cal[fecha].asignaciones || []).forEach(a => {
+      const m = getMedico(a.medicoId); if (!m) return;
+      if (!acc[m.id]) acc[m.id] = { medico: m, guardias: 0, horas: 0 };
+      acc[m.id].guardias += 1;
+      acc[m.id].horas += durationHoras(a);
+    });
+  });
+  return Object.values(acc)
+    .map(x => ({ ...x, promedio: x.guardias ? (x.horas / x.guardias) : 0 }))
+    .sort((a, b) => b.horas - a.horas);
+}
+
+// ─── MEJORA 8: VISTA SEMANAL ─────────────────────────────────
+function semanaDeFecha(fecha) {
+  const d = new Date(fecha + "T00:00:00");
+  const dow = (d.getDay() + 6) % 7;   // 0 = lunes
+  const lunes = new Date(d); lunes.setDate(d.getDate() - dow);
+  const dias = [];
+  for (let i = 0; i < 7; i++) {
+    const x = new Date(lunes); x.setDate(lunes.getDate() + i);
+    dias.push(`${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`);
+  }
+  return dias;
+}
+function anclaSemana() {
+  if (state.semanaAncla) return state.semanaAncla;
+  const hoy = new Date().toISOString().split("T")[0];
+  const primero = `${state.anio}-${String(state.mes + 1).padStart(2, "0")}-01`;
+  const enMes = hoy.startsWith(`${state.anio}-${String(state.mes + 1).padStart(2, "0")}`);
+  state.semanaAncla = enMes ? hoy : primero;
+  return state.semanaAncla;
+}
+function toggleVista() {
+  state.modoCal = state.modoCal === "semana" ? "mes" : "semana";
+  if (state.modoCal === "semana") anclaSemana();
+  render();
+}
+function moverSemana(dir) {
+  const d = new Date(anclaSemana() + "T00:00:00");
+  d.setDate(d.getDate() + dir * 7);
+  state.semanaAncla = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  // sincronizar mes/año mostrados con la semana
+  state.anio = d.getFullYear(); state.mes = d.getMonth();
+  cargarEstado();
+  render();
+}
+function navPrev() { state.modoCal === "semana" ? moverSemana(-1) : prevMes(); }
+function navNext() { state.modoCal === "semana" ? moverSemana(1) : nextMes(); }
 
 function setNota(fecha, nota) {
   if(!state.calendario[fecha]) state.calendario[fecha] = {asignaciones:[], notas:""};
@@ -1138,6 +1351,23 @@ function exportarPDF() {
        </div>`
     : "";
 
+  // MEJORA 9: resumen de horas por médico en el PDF
+  const rhPDF = resumenHoras();
+  const horasPDF = rhPDF.length
+    ? `<div style="margin-top:14px">
+         <div style="font-size:11pt;font-weight:700;color:#111;margin-bottom:6px">Resumen de horas por médico</div>
+         <table style="width:auto;min-width:60%;border-collapse:collapse;font-size:9pt">
+           <thead><tr>${["Médico","Guardias","Horas totales","Promedio"].map(h=>`<th style="background:#e5e7eb;border:1px solid #9ca3af;padding:4px 10px;text-align:left">${h}</th>`).join("")}</tr></thead>
+           <tbody>${rhPDF.map(x=>`<tr>
+             <td style="border:1px solid #cbd5e1;padding:3px 10px">${escHTML(x.medico.nombre)}</td>
+             <td style="border:1px solid #cbd5e1;padding:3px 10px;text-align:center">${x.guardias}</td>
+             <td style="border:1px solid #cbd5e1;padding:3px 10px;text-align:center;font-weight:700">${x.horas} h</td>
+             <td style="border:1px solid #cbd5e1;padding:3px 10px;text-align:center">${x.promedio.toFixed(1)} h</td>
+           </tr>`).join("")}</tbody>
+         </table>
+       </div>`
+    : "";
+
   const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
 <title>Guardias ${MESES[state.mes]} ${state.anio}</title>
 <style>
@@ -1163,6 +1393,7 @@ function exportarPDF() {
   <thead><tr>${["L","M","M","J","V","S","D"].map(d=>`<th>${d}</th>`).join("")}</tr></thead>
   <tbody>${filas.join("\n")}</tbody>
 </table>
+${horasPDF}
 ${notasHTML}
 </body></html>`;
 
