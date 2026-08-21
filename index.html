@@ -47,10 +47,6 @@ button { font-family: inherit; cursor: pointer; }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* NOTA MES */
-.nota-mes-wrap { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
-.nota-mes-display { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: #fefce8; border: 1px solid #fde047; border-radius: 6px; cursor: pointer; flex: 1; }
-.nota-mes-edit { display: flex; align-items: center; gap: 8px; flex: 1; }
-.nota-mes-edit input { flex: 1; padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 0.83rem; }
 
 /* PANEL NOTAS DEL MES */
 .notas-panel { background: #fff; border: 1px solid #d1d5db; border-radius: 10px; padding: 14px 16px; margin-top: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.06); }
@@ -244,14 +240,11 @@ let state = {
   anio: 2026,
   mes: 7,
   calendario: null,
-  notaMes: "Nahira pide el 14/8.",
   historialMeses: {},
-  historialNotas: {},
   filtroMedico: "",
   modalDia: null,
   modalCopiar: null,
   modalMedico: false,
-  editNotaMes: false,
   addMedico: "",
   addRol: "D12",
   editHorario: null,
@@ -477,7 +470,6 @@ function aplicarPatronDesdeCal(anio, mes, calOrigen) {
 
 state.calendario = cargarAgosto2026();
 state.historialMeses["2026-7"] = state.calendario;
-state.historialNotas["2026-7"] = state.notaMes;
 
 function diaData(fecha) {
   return state.calendario[fecha] || {asignaciones:[], notas:""};
@@ -708,17 +700,6 @@ function renderCalendario() {
     gridInner = vaciosHTML + diasHTML + rellenoHTML;
   }
 
-  // Nota mes
-  const notaMesHTML = (state.jefe && state.editNotaMes)
-    ? `<div class="nota-mes-edit">
-        <input value="${state.notaMes}" oninput="state.notaMes=this.value" placeholder="Nota para este mes..." style="flex:1;padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:0.83rem">
-        <button class="btn btn-secondary btn-sm" onclick="state.editNotaMes=false;render()">Guardar</button>
-       </div>`
-    : `<div class="nota-mes-display" ${state.jefe ? `onclick="state.editNotaMes=true;render()"` : ""}>
-        <span style="font-size:0.75rem">📌</span>
-        <span style="font-size:0.8rem;color:#b45309;font-weight:500">${state.notaMes || (state.jefe ? "Agregar nota del mes..." : "—")}</span>
-        ${state.jefe ? `<span style="font-size:0.7rem;color:#6b7280;margin-left:4px">✎</span>` : ""}
-       </div>`;
 
   return `
     <div class="toolbar">
@@ -767,7 +748,6 @@ function renderCalendario() {
       <span style="font-size:0.85rem;color:#166534;font-weight:700">🔄 Intercambio — ${escHTML(nombresDeUids(state.swapMedicoOrigen.fecha, state.swapMedicoOrigen.uids).join(", "))} (Día ${dnum(state.swapMedicoOrigen.fecha)}) &nbsp;→&nbsp; clickeá el día destino</span>
       <button class="btn btn-secondary btn-sm" onclick="cancelarSwapMedicos()">✕ Cancelar</button>
     </div>` : ""}
-    <div class="nota-mes-wrap">${notaMesHTML}</div>
     <div class="leyenda">${leyendaHTML}</div>
 
     <div class="cal-wrap">
@@ -1438,7 +1418,6 @@ function nextMes() {
 function irAMes(anioNuevo, mesNuevo) {
   // Guardar mes actual (memoria + localStorage)
   state.historialMeses[`${state.anio}-${state.mes}`] = state.calendario;
-  state.historialNotas[`${state.anio}-${state.mes}`] = state.notaMes;
   guardarEstado();
 
   const clave = `${anioNuevo}-${mesNuevo}`;
@@ -1446,13 +1425,11 @@ function irAMes(anioNuevo, mesNuevo) {
   if(calGuardado) {
     state.calendario = calGuardado;
     state.historialMeses[clave] = calGuardado;
-    state.notaMes = state.historialNotas[clave] || "";
     state.anio = anioNuevo;
     state.mes = mesNuevo;
     render();
   } else if(state.historialMeses[clave]) {
     state.calendario = state.historialMeses[clave];
-    state.notaMes = state.historialNotas[clave] || "";
     state.anio = anioNuevo;
     state.mes = mesNuevo;
     render();
@@ -1474,7 +1451,6 @@ function aplicarCopia(copiar) {
     : generarMesDesdeConfig(anioNuevo, mesNuevo);   // pre-llenado con los turnos de la config, como ⚠️ Pendiente
 
   state.calendario = calNuevo;
-  state.notaMes = "";
   state.historialMeses[`${anioNuevo}-${mesNuevo}`] = calNuevo;
   state.anio = anioNuevo;
   state.mes = mesNuevo;
