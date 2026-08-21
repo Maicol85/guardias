@@ -266,7 +266,7 @@ let state = {
   jefe: (function(){ try { return sessionStorage.getItem("guardias_jefe") === "1"; } catch(e){ return false; } })(),  // MEJORA 13
   ausPanel: false,        // panel de ausencias abierto
   ausDetalleFecha: null,  // detalle de ausencias de un día
-  ausForm: { medicoId:"", tipo:"licencia", desde:"", hasta:"", motivo:"" },
+  ausForm: { medicoId:"", tipo:"licencia", fDesde:"", fHasta:"", motivo:"" },
   nuevoMedico: { nombre:"", sigla:"", color:"#1d4ed8" },
   config: null,           // configuración del servicio (se carga en initPatronDefault)
 };
@@ -1314,11 +1314,44 @@ const TIPOS_AUS = {
 };
 function tipoAus(t) { return TIPOS_AUS[t] || TIPOS_AUS.otro; }
 function ausKey(anio, mes) { return `guardias_ausencias_${anio}_${mes + 1}`; }
-function ausGet() {
-  try { const a = JSON.parse(localStorage.getItem(ausKey(state.anio, state.mes))); return Array.isArray(a) ? a : []; }
+function ausGetMes(anio, mes) {
+  try { const a = JSON.parse(localStorage.getItem(ausKey(anio, mes))); return Array.isArray(a) ? a : []; }
   catch (e) { return []; }
 }
-function ausSave(arr) { try { localStorage.setItem(ausKey(state.anio, state.mes), JSON.stringify(arr)); } catch (e) {} }
+function ausSaveMes(anio, mes, arr) { try { localStorage.setItem(ausKey(anio, mes), JSON.stringify(arr)); } catch (e) {} }
+function ausGet() { return ausGetMes(state.anio, state.mes); }
+function ausSave(arr) { ausSaveMes(state.anio, state.mes, arr); }
+
+// ─── AUSENCIAS QUE CRUZAN MESES ──────────────────────────────
+// Las ausencias se guardan por mes (una clave de localStorage por mes), así que un rango
+// que cruza meses se parte en SEGMENTOS: uno por cada mes que toca. Todos los segmentos
+// comparten `grupoId` y guardan el rango completo (fDesde/fHasta) para poder mostrarlo entero.
+const MESES_CORTO = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
+function isoADMY(iso) { const p = String(iso || "").split("-").map(Number); return { anio: p[0], mes: p[1] - 1, dia: p[2] }; }
+function fmtFechaCorta(iso) { const f = isoADMY(iso); return (f.dia && MESES_CORTO[f.mes]) ? `${f.dia} ${MESES_CORTO[f.mes]}` : ""; }
+function fmtRangoAus(a) {
+  if (a.fDesde && a.fHasta) {
+    return a.fDesde === a.fHasta ? fmtFechaCorta(a.fDesde) : `${fmtFechaCorta(a.fDesde)} — ${fmtFechaCorta(a.fHasta)}`;
+  }
+  return a.desde === a.hasta ? `día ${a.desde}` : `días ${a.desde}–${a.hasta}`;   // formato viejo
+}
+// Parte un rango de fechas completas en {anio, mes, desde, hasta} por cada mes involucrado.
+function segmentosPorMes(fDesde, fHasta) {
+  const a = isoADMY(fDesde), b = isoADMY(fHasta);
+  const segs = [];
+  let y = a.anio, m = a.mes;
+  while (y < b.anio || (y === b.anio && m <= b.mes)) {
+    const totalDias = new Date(y, m + 1, 0).getDate();
+    segs.push({
+      anio: y, mes: m,
+      desde: (y === a.anio && m === a.mes) ? a.dia : 1,
+      hasta: (y === b.anio && m === b.mes) ? b.dia : totalDias,
+    });
+    m++; if (m > 11) { m = 0; y++; }
+    if (segs.length > 36) break;   // tope de seguridad
+  }
+  return segs;
+}
 function fechaDeDia(d) { return `${state.anio}-${String(state.mes + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
 function ausDeDia(fecha) { const d = dnum(fecha); return ausGet().filter(a => d >= a.desde && d <= a.hasta); }
 // Días de ausencia (licencia/enfermedad/solicitud) sin ningún médico asignado => pendientes de cubrir.
@@ -1345,18 +1378,41 @@ function cerrarAusDetalle() { state.ausDetalleFecha = null; render(); }
 function guardarAusencia() {
   const f = state.ausForm;
   const medicoId = Number(f.medicoId);
-  const desde = parseInt(f.desde, 10), hasta = parseInt(f.hasta, 10);
-  const total = new Date(state.anio, state.mes + 1, 0).getDate();
   if (!medicoId) { alert("Elegí un médico."); return; }
-  if (!desde || !hasta || desde < 1 || hasta > total || desde > hasta) { alert("Revisá los días (desde/hasta) dentro del mes."); return; }
-  const arr = ausGet();
-  arr.push({ id: Date.now(), medicoId, tipo: f.tipo, desde, hasta, motivo: (f.motivo || "").trim(), ts: Date.now() });
-  ausSave(arr);
-  state.ausForm = { medicoId: "", tipo: "licencia", desde: "", hasta: "", motivo: "" };
+  if (!f.fDesde || !f.fHasta) { alert("Elegí la fecha de inicio y la de fin."); return; }
+  if (f.fDesde > f.fHasta) { alert("La fecha de fin no puede ser anterior a la de inicio."); return; }
+
+  const segs = segmentosPorMes(f.fDesde, f.fHasta);
+  const grupoId = Date.now();
+  const motivo = (f.motivo || "").trim();
+  segs.forEach((s, i) => {
+    const arr = ausGetMes(s.anio, s.mes);
+    arr.push({
+      id: grupoId + i, grupoId, medicoId, tipo: f.tipo,
+      desde: s.desde, hasta: s.hasta,        // días dentro de ESE mes (lo que usa ausDeDia)
+      fDesde: f.fDesde, fHasta: f.fHasta,    // rango completo, para mostrarlo entero
+      motivo, ts: grupoId,
+    });
+    ausSaveMes(s.anio, s.mes, arr);
+  });
+
+  state.ausForm = { medicoId: "", tipo: "licencia", fDesde: "", fHasta: "", motivo: "" };
   render();
+  if (segs.length > 1) {
+    alert(`Ausencia registrada: ${fmtRangoAus({fDesde:f.fDesde, fHasta:f.fHasta})} (${segs.length} meses afectados).`);
+  }
 }
+// Borra la ausencia completa: todos sus segmentos, en todos los meses que toca.
 function borrarAusencia(id) {
-  ausSave(ausGet().filter(a => a.id !== id));
+  const aus = ausGet().find(a => a.id === id);
+  if (!aus) return;
+  if (aus.grupoId && aus.fDesde && aus.fHasta) {
+    segmentosPorMes(aus.fDesde, aus.fHasta).forEach(s => {
+      ausSaveMes(s.anio, s.mes, ausGetMes(s.anio, s.mes).filter(x => x.grupoId !== aus.grupoId));
+    });
+  } else {
+    ausSave(ausGet().filter(a => a.id !== id));   // ausencia vieja, de un solo mes
+  }
   render();
 }
 
@@ -1740,14 +1796,14 @@ function renderModalAusencias() {
   const lista = arr.length
     ? arr.map(a => {
         const m = getMedico(a.medicoId); const ti = tipoAus(a.tipo);
-        const rango = a.desde === a.hasta ? `día ${a.desde}` : `días ${a.desde}–${a.hasta}`;
+        const rango = fmtRangoAus(a);
         let sinCubrir = 0; for (let d = a.desde; d <= a.hasta; d++) if (!asigsReales(fechaDeDia(d)).length) sinCubrir++;
         const alerta = sinCubrir > 0 ? `<span style="color:#dc2626;font-weight:700;font-size:0.7rem"> · ⚠️ ${sinCubrir} sin cubrir</span>` : "";
         return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #eee">
           <span style="font-size:0.9rem">${ti.emoji}</span>
           <div style="flex:1">
             <div style="font-size:0.82rem;font-weight:600;color:#111827">${m ? escHTML(m.nombre) : "—"} · <span style="color:${ti.color}">${ti.label}</span></div>
-            <div style="font-size:0.72rem;color:#6b7280">${MESES[state.mes]} · ${rango}${a.motivo ? " · " + escHTML(a.motivo) : ""}${alerta}</div>
+            <div style="font-size:0.72rem;color:#6b7280">${escHTML(rango)}${a.fDesde && isoADMY(a.fDesde).mes !== state.mes ? " (continúa de otro mes)" : ""}${a.motivo ? " · " + escHTML(a.motivo) : ""}${alerta}</div>
           </div>
           ${state.jefe ? `<button onclick="borrarAusencia(${a.id})" style="background:#fef2f2;border:none;color:#b91c1c;border-radius:5px;padding:2px 8px;cursor:pointer;font-size:0.72rem">Eliminar</button>` : ""}
         </div>`;
@@ -1759,8 +1815,10 @@ function renderModalAusencias() {
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
         <select class="form-select" onchange="state.ausForm.medicoId=this.value"><option value="">Médico...</option>${opsMed}</select>
         <select class="form-select" onchange="state.ausForm.tipo=this.value">${opsTipo}</select>
-        <input class="form-input" type="number" min="1" max="31" placeholder="Día desde" value="${f.desde}" oninput="state.ausForm.desde=this.value">
-        <input class="form-input" type="number" min="1" max="31" placeholder="Día hasta" value="${f.hasta}" oninput="state.ausForm.hasta=this.value">
+        <label style="font-size:0.68rem;color:#6b7280;font-weight:600">Desde
+          <input class="form-input" type="date" value="${escAttr(f.fDesde || "")}" oninput="state.ausForm.fDesde=this.value" style="margin-top:2px"></label>
+        <label style="font-size:0.68rem;color:#6b7280;font-weight:600">Hasta
+          <input class="form-input" type="date" value="${escAttr(f.fHasta || "")}" oninput="state.ausForm.fHasta=this.value" style="margin-top:2px"></label>
       </div>
       <input class="form-input" placeholder="Motivo (opcional)" value="${escAttr(f.motivo)}" oninput="state.ausForm.motivo=this.value" style="margin-bottom:8px">
       <button class="btn btn-primary btn-full" onclick="guardarAusencia()">➕ Registrar</button>
@@ -1783,10 +1841,10 @@ function renderModalAusDetalle() {
   const cubierto = asigsReales(fecha).length > 0;
   const filas = aus.map(a => {
     const m = getMedico(a.medicoId); const ti = tipoAus(a.tipo);
-    const rango = a.desde === a.hasta ? `día ${a.desde}` : `días ${a.desde}–${a.hasta}`;
+    const rango = fmtRangoAus(a);
     return `<div style="padding:7px 0;border-bottom:1px solid #eee;font-size:0.82rem">
       <div style="font-weight:600;color:#111827">${ti.emoji} ${m ? escHTML(m.nombre) : "—"} · <span style="color:${ti.color}">${ti.label}</span></div>
-      <div style="font-size:0.72rem;color:#6b7280">${MESES[state.mes]} · ${rango}${a.motivo ? " · motivo: " + escHTML(a.motivo) : ""}</div>
+      <div style="font-size:0.72rem;color:#6b7280">${escHTML(rango)}${a.motivo ? " · motivo: " + escHTML(a.motivo) : ""}</div>
     </div>`;
   }).join("");
   return `<div class="modal-bg" onclick="if(event.target===this)cerrarAusDetalle()">
