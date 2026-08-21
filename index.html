@@ -268,6 +268,7 @@ let state = {
   ausDetalleFecha: null,  // detalle de ausencias de un día
   ausForm: { medicoId:"", tipo:"licencia", desde:"", hasta:"", motivo:"" },
   nuevoMedico: { nombre:"", sigla:"", color:"#1d4ed8" },
+  config: null,           // configuración del servicio (se carga en initPatronDefault)
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────
@@ -364,6 +365,62 @@ function aplicarPatronMes(anio, mes) {
   return cal;
 }
 function cargarAgosto2026() { return aplicarPatronMes(2026, 7); }
+
+// ─── CONFIGURACIÓN DEL SERVICIO (localStorage "guardias_config") ──
+// turnos: { [dow base-lunes 0=Lun…6=Dom]: [ {id, rol, nombre, horario, requeridos} ] }
+// Define la plantilla de cobertura: qué turnos necesita cada día de semana y cuántos médicos.
+const CONFIG_KEY = "guardias_config";
+function configPorDefecto() {
+  const turnos = {};
+  for (let dl = 0; dl < 7; dl++) turnos[dl] = [];
+  // Se siembra desde el patrón semanal histórico (base-domingo) agrupando por rol + horario.
+  Object.keys(PATRON_SEMANAL).forEach(dowDom => {
+    const dl = (Number(dowDom) + 6) % 7;   // a base-lunes
+    const agrup = {};
+    PATRON_SEMANAL[dowDom].forEach(t => {
+      const horario = t.horario || getRol(t.rol).label;
+      const k = t.rol + "|" + horario;
+      if (!agrup[k]) agrup[k] = { rol: t.rol, horario, requeridos: 0 };
+      agrup[k].requeridos++;
+    });
+    turnos[dl] = Object.values(agrup).map((t, i) => ({
+      id: `t${dl}_${i}`, rol: t.rol, nombre: getRol(t.rol).desc, horario: t.horario, requeridos: t.requeridos,
+    }));
+  });
+  return { servicio: "Emergencia — Hospital Artigas", coordinador: "", turnos };
+}
+function cargarConfig() {
+  try {
+    const c = JSON.parse(localStorage.getItem(CONFIG_KEY));
+    if (c && c.turnos) return c;
+  } catch (e) {}
+  return configPorDefecto();
+}
+function guardarConfig() {
+  try { localStorage.setItem(CONFIG_KEY, JSON.stringify(state.config)); } catch (e) {}
+}
+function turnosDeDow(dow) { return (state.config && state.config.turnos && state.config.turnos[dow]) || []; }
+
+// Genera un mes "en blanco" pre-llenado con los turnos de la config, todos como ⚠️ Pendiente.
+// Cada turno usa su rol real (D12/N12/A6…) con el médico fantasma: así el turno se ve en rojo
+// y además se sabe QUÉ turno falta cubrir (y si es de tipo Guardia, para el badge).
+function generarMesDesdeConfig(anio, mes) {
+  const cal = generarMesVacio(anio, mes);
+  const total = new Date(anio, mes + 1, 0).getDate();
+  for (let d = 1; d <= total; d++) {
+    const f = `${anio}-${String(mes + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const dow = (new Date(anio, mes, d).getDay() + 6) % 7;   // base-lunes
+    const asigs = [];
+    turnosDeDow(dow).forEach((t, ti) => {
+      const n = Math.max(1, Number(t.requeridos) || 1);
+      for (let k = 0; k < n; k++) {
+        asigs.push({ medicoId: 0, rol: t.rol, horario: t.horario, id: Date.now() + d * 1000 + ti * 10 + k });
+      }
+    });
+    cal[f].asignaciones = asigs;
+  }
+  return cal;
+}
 
 // ─── CAMBIO 4: PATRÓN POR DÍA DE SEMANA DESDE UN MES REAL ────
 const DOW_NOMBRE = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];   // base-lunes 0=Lun … 6=Dom
@@ -712,6 +769,113 @@ function renderCalendario() {
 }
 
 // ─── RENDER EQUIPO ───────────────────────────────────────────
+// ─── PANTALLA DE CONFIGURACIÓN DEL SERVICIO ──────────────────
+function cfgSetCampo(campo, valor) { state.config[campo] = valor; guardarConfig(); }
+function cfgAddTurno(dow) {
+  const arr = turnosDeDow(dow);
+  arr.push({ id: "t" + dow + "_" + Date.now().toString(36), rol: "D12", nombre: getRol("D12").desc, horario: getRol("D12").label, requeridos: 1 });
+  state.config.turnos[dow] = arr;
+  guardarConfig(); render();
+}
+function cfgSetTurno(dow, id, campo, valor) {
+  const t = turnosDeDow(dow).find(x => x.id === id);
+  if (!t) return;
+  if (campo === "requeridos") t.requeridos = Math.max(1, Number(valor) || 1);
+  else if (campo === "rol") { t.rol = valor; if (!t.nombre) t.nombre = getRol(valor).desc; }
+  else t[campo] = valor;
+  guardarConfig();
+  if (campo === "rol" || campo === "requeridos") render();
+}
+// Validación: avisar si el turno ya tiene asignaciones cargadas en el mes en pantalla.
+function cfgDelTurno(dow, id) {
+  const t = turnosDeDow(dow).find(x => x.id === id);
+  if (!t) return;
+  let usados = 0;
+  Object.keys(state.calendario || {}).forEach(f => {
+    const [y, mm, dd] = f.split("-").map(Number);
+    if ((new Date(y, mm - 1, dd).getDay() + 6) % 7 !== dow) return;
+    (state.calendario[f].asignaciones || []).forEach(a => {
+      if (a.rol === t.rol && String(horarioDe(a)) === String(t.horario) && !esPendiente(a)) usados++;
+    });
+  });
+  const aviso = usados
+    ? `\n\n⚠️ Hay ${usados} asignación(es) activas de este turno en ${MESES[state.mes]}. Eliminarlo de la plantilla NO borra esas guardias, pero los meses nuevos ya no lo van a incluir.`
+    : "";
+  if (!confirm(`¿Eliminar el turno "${t.nombre || getRol(t.rol).desc}" de los ${DOW_NOMBRE[dow]}?${aviso}`)) return;
+  state.config.turnos[dow] = turnosDeDow(dow).filter(x => x.id !== id);
+  guardarConfig(); render();
+}
+
+function renderConfig() {
+  const cfg = state.config;
+  const opsRol = ["Guardia", "Apoyo", "Especial", "Otro"].map(g => {
+    const rs = ROLES_BASE.filter(r => r.grupo === g && r.id !== "PEN");
+    if (!rs.length) return "";
+    return `<optgroup label="── ${g}">${rs.map(r => `<option value="${r.id}">${escHTML(r.desc)}</option>`).join("")}</optgroup>`;
+  }).join("");
+
+  const tablaDias = DOW_NOMBRE.map((nombreDow, dow) => {
+    const turnos = turnosDeDow(dow);
+    const filas = turnos.length
+      ? turnos.map(t => {
+          const grupo = getRol(t.rol).grupo;
+          return `<div style="display:grid;grid-template-columns:1.3fr 1.3fr 1fr 62px 34px;gap:6px;align-items:center;padding:5px 0;border-bottom:1px solid #f1f5f9">
+            <select class="form-select" style="font-size:0.75rem;padding:3px 6px" onchange="cfgSetTurno(${dow},'${t.id}','rol',this.value)">
+              ${opsRol.replace(`value="${t.rol}"`, `value="${t.rol}" selected`)}
+            </select>
+            <input class="form-input" style="font-size:0.75rem;padding:3px 6px" value="${escAttr(t.nombre || "")}" placeholder="Nombre del turno"
+              oninput="cfgSetTurno(${dow},'${t.id}','nombre',this.value)">
+            <input class="form-input" style="font-size:0.75rem;padding:3px 6px" value="${escAttr(t.horario || "")}" placeholder="08–20 hs"
+              oninput="cfgSetTurno(${dow},'${t.id}','horario',this.value)">
+            <input class="form-input" type="number" min="1" max="20" style="font-size:0.75rem;padding:3px 6px;text-align:center" value="${Number(t.requeridos) || 1}"
+              onchange="cfgSetTurno(${dow},'${t.id}','requeridos',this.value)" title="Médicos requeridos">
+            <button onclick="cfgDelTurno(${dow},'${t.id}')" title="Eliminar turno"
+              style="background:#fef2f2;border:none;color:#b91c1c;border-radius:5px;padding:3px 6px;cursor:pointer;font-size:0.75rem;font-weight:700">✕</button>
+          </div>`;
+        }).join("")
+      : `<div style="padding:8px 0;color:#9ca3af;font-size:0.76rem">Sin turnos configurados para este día.</div>`;
+    const totalMed = turnos.reduce((s, t) => s + (Number(t.requeridos) || 1), 0);
+    return `<div style="margin-bottom:14px;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;background:#fff">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div style="font-size:0.85rem;font-weight:700;color:#111827">${nombreDow}
+          <span style="font-size:0.7rem;font-weight:500;color:#6b7280">· ${turnos.length} turno${turnos.length !== 1 ? "s" : ""} · ${totalMed} médico${totalMed !== 1 ? "s" : ""}</span></div>
+        <button class="btn btn-secondary btn-sm" onclick="cfgAddTurno(${dow})">+ Agregar turno</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1.3fr 1.3fr 1fr 62px 34px;gap:6px;font-size:0.64rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;padding-bottom:3px;border-bottom:1px solid #e5e7eb">
+        <span>Tipo</span><span>Nombre del turno</span><span>Horario</span><span style="text-align:center">Médicos</span><span></span>
+      </div>
+      ${filas}
+    </div>`;
+  }).join("");
+
+  return `
+    <div class="section-title">⚙️ Configuración del servicio</div>
+
+    <div class="card-wrap" style="padding:14px;margin-bottom:20px">
+      <div style="font-size:0.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Datos del servicio</div>
+      <div class="form-grid-2">
+        <div>
+          <div class="form-label">Nombre del servicio</div>
+          <input class="form-input" value="${escAttr(cfg.servicio || "")}" placeholder="Ej: Emergencia — Hospital Artigas"
+            oninput="cfgSetCampo('servicio',this.value)" onchange="render()">
+        </div>
+        <div>
+          <div class="form-label">Coordinador / Jefe</div>
+          <input class="form-input" value="${escAttr(cfg.coordinador || "")}" placeholder="Ej: Dr. M. Dos Santos"
+            oninput="cfgSetCampo('coordinador',this.value)" onchange="render()">
+        </div>
+      </div>
+      <div style="font-size:0.68rem;color:#6b7280;margin-top:8px">Estos datos aparecen en el encabezado de la app y en el PDF exportado.</div>
+    </div>
+
+    <div class="section-title">Plantilla de cobertura semanal</div>
+    <div style="font-size:0.75rem;color:#6b7280;margin:-6px 0 12px;line-height:1.5">
+      Definí qué turnos necesita cada día de semana. Al generar un mes con <strong>“Empezar en blanco”</strong>,
+      cada día arranca con estos turnos marcados como <strong style="color:#b91c1c">⚠️ Pendiente</strong>.
+    </div>
+    ${tablaDias}`;
+}
+
 function renderEquipo() {
   const filasHTML = medicos.map((m,i) => `
     <div class="equipo-row" style="background:${i%2===0?'#fff':'#fafafa'}">
@@ -1010,6 +1174,7 @@ function render() {
   if(state.view === "calendario") contenido = renderCalendario();
   else if(state.view === "equipo") contenido = renderEquipo();
   else if(state.view === "estadisticas") contenido = renderEstadisticas();
+  else if(state.view === "config") contenido = renderConfig();
 
   const sc = sinCubrir();
 
@@ -1020,7 +1185,14 @@ function render() {
         <div class="header-logo">
           <span class="header-title">Guardia<span>Sync</span></span>
           <span class="header-sep"></span>
-          <span class="header-suite">CeiboMed</span>
+          ${(function(){
+            const c = state.config || {};
+            if (!c.servicio && !c.coordinador) return `<span class="header-suite">CeiboMed</span>`;
+            return `<span class="header-suite" style="display:flex;flex-direction:column;line-height:1.25;text-align:left">
+              <span>${escHTML(c.servicio || "CeiboMed")}</span>
+              ${c.coordinador ? `<span style="font-size:0.62rem;opacity:.75;text-transform:none;letter-spacing:0">Coord.: ${escHTML(c.coordinador)}</span>` : ""}
+            </span>`;
+          })()}
         </div>
         <div style="display:flex;gap:8px;align-items:center">
           ${sc > 0 ? `<div class="badge-alerta" style="cursor:pointer" title="Ir al primer día sin cubrir" onclick="irPrimerSinCubrir()">⚠️ ${sc} día${sc!==1?"s":""} sin cubrir</div>` : ""}
@@ -1036,6 +1208,7 @@ function render() {
           {id:"calendario", icon:"📅", label:"Calendario"},
           {id:"equipo",     icon:"👥", label:"Equipo"},
           {id:"estadisticas",icon:"📊", label:"Estadísticas"},
+          {id:"config",     icon:"⚙️", label:"Configuración"},
         ].map(n => `<button class="nav-btn ${state.view===n.id?'active':''}" onclick="setView('${n.id}')">${n.icon} ${n.label}</button>`).join("")}
       </div>` : ""}
 
@@ -1224,7 +1397,7 @@ function aplicarCopia(copiar) {
   const calOrigen = calDelMes(anioOrigen, mesOrigen);   // misma fuente que la vista previa del modal
   const calNuevo = copiar
     ? aplicarPatronDesdeCal(anioNuevo, mesNuevo, calOrigen)
-    : generarMesVacio(anioNuevo, mesNuevo);
+    : generarMesDesdeConfig(anioNuevo, mesNuevo);   // pre-llenado con los turnos de la config, como ⚠️ Pendiente
 
   state.calendario = calNuevo;
   state.notaMes = "";
@@ -1949,6 +2122,14 @@ function exportarPDF() {
   .notas-titulo { font-size:12pt; font-weight:700; color:#111; margin-bottom:6px; border-bottom:1px solid #9ca3af; padding-bottom:4px; }
   .notas-cuerpo { font-size:9pt; color:#374151; line-height:1.5; white-space:pre-wrap; }
 </style></head><body>
+${(function(){
+  const c = state.config || {};
+  if (!c.servicio && !c.coordinador) return "";
+  return `<div style="text-align:center;margin-bottom:2px">
+    ${c.servicio ? `<div style="font-size:12pt;font-weight:700;color:#111">${escHTML(c.servicio)}</div>` : ""}
+    ${c.coordinador ? `<div style="font-size:9pt;color:#374151">Coordinador: ${escHTML(c.coordinador)}</div>` : ""}
+  </div>`;
+})()}
 <h1 class="titulo">${MESES[state.mes].toUpperCase()} ${state.anio}</h1>
 <table>
   <thead><tr>${["L","M","M","J","V","S","D"].map(d=>`<th>${d}</th>`).join("")}</tr></thead>
@@ -2039,6 +2220,7 @@ function importarMesJSON(ev) {
 
 // ─── LOGIN + INIT (CAMBIO 4) ─────────────────────────────────
 function initPatronDefault() {
+  state.config = cargarConfig();   // configuración del servicio
   // Guardar la plantilla por defecto (patrón semanal) en localStorage
   try { localStorage.setItem("guardias_plantilla_default", JSON.stringify(PATRON_SEMANAL)); } catch(e) {}
   // Fix único: limpiar agosto 2026 y reemplazar por el patrón correcto
