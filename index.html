@@ -205,7 +205,17 @@ const ROLES_BASE = [
   { id:"POL",  label:"Policlínica", color:"#0e7490", bg:"#ecfeff", desc:"Policlínica PA",       grupo:"Especial" },
   { id:"INT",  label:"Interno",     color:"#6d28d9", bg:"#f5f3ff", desc:"Interno/Estudiante",   grupo:"Especial" },
   { id:"X",    label:"Personaliz.", color:"#15803d", bg:"#f0fdf4", desc:"Rol libre",            grupo:"Otro"     },
+  { id:"PEN",  label:"⚠️ Pendiente", color:"#dc2626", bg:"#fef2f2", desc:"Pendiente de cubrir",  grupo:"Especial" },
 ];
+
+// ─── TURNO PENDIENTE DE CUBRIR ───────────────────────────────
+// Médico fantasma: NO está en `medicos` (no sale en Equipo, ni en Estadísticas,
+// ni en el filtro del calendario), pero sí se ofrece en el selector del modal del día.
+const MEDICO_PENDIENTE = { id:0, nombre:"PENDIENTE", sigla:"⚠️", color:"#dc2626" };
+// Un turno está pendiente si tiene el rol PEN o el médico fantasma.
+function esPendiente(a) { return !!a && (a.rol === "PEN" || Number(a.medicoId) === 0); }
+// Asignaciones que realmente cubren el día (las pendientes no cuentan como cobertura).
+function asigsReales(fecha) { return (diaData(fecha).asignaciones || []).filter(a => !esPendiente(a)); }
 
 // ORDEN para sorting: D12 primero, N12 segundo, resto después
 const ROL_ORDEN = { D12:0, N12:1 };
@@ -262,7 +272,7 @@ let state = {
 
 // ─── HELPERS ─────────────────────────────────────────────────
 
-function getMedico(id) { return medicos.find(m => m.id === Number(id)); }
+function getMedico(id) { return Number(id) === 0 ? MEDICO_PENDIENTE : medicos.find(m => m.id === Number(id)); }
 function getRol(id) { return ROLES_BASE.find(r => r.id === id) || ROLES_BASE[0]; }
 // Horario efectivo de una asignación: usa el override editable por médico/día si existe, si no el del rol.
 function horarioDe(a) { return (a && a.horario != null && String(a.horario).trim() !== "") ? String(a.horario) : getRol(a.rol).label; }
@@ -417,7 +427,8 @@ function diaData(fecha) {
 }
 
 function sinCubrir() {
-  return Object.values(state.calendario).filter(d => d.asignaciones.length === 0).length;
+  // Un día con solo turnos "⚠️ Pendiente" sigue contando como sin cubrir.
+  return Object.keys(state.calendario).filter(f => asigsReales(f).length === 0).length;
 }
 
 function getStats() {
@@ -478,6 +489,17 @@ function renderAsigCelda(a, fecha) {
   const dragAttrs = state.jefe ? `draggable="true" ondragstart="dragStartMed(event,'${fecha}','${asigUid(a)}')" ondragend="dragEndMed(event)"` : "";
   const grab = state.jefe ? "cursor:grab" : "default";
 
+  // Turno pendiente de cubrir: fila roja destacada, sin nombre de médico.
+  // Si el turno tiene horario propio (ej. "08-20hs") se muestra para saber QUÉ turno falta cubrir.
+  if (esPendiente(a)) {
+    const pen = getRol("PEN");
+    const horaTxt = (a.horario && String(a.horario).trim()) ? String(a.horario) : (a.rol !== "PEN" ? getRol(a.rol).label : "");
+    return `<div class="asig-row apoyo" ${dragAttrs} style="--rol-color:${pen.color};--rol-bg:${pen.bg};border-left-color:${pen.color};background:${pen.bg};${grab}">
+      <div class="asig-rol-label" style="color:${pen.color};font-weight:700">⚠️ Pendiente</div>
+      ${horaTxt ? `<div class="asig-nombre apoyo-nombre" style="color:${pen.color}">${escHTML(horaTxt)}</div>` : ""}
+    </div>`;
+  }
+
   if(esApoyo) {
     // Apoyo: mantiene color del rol
     return `<div class="asig-row apoyo" ${dragAttrs} style="--rol-color:${rol.color};--rol-bg:${rol.bg};border-left-color:${rol.color};background:${rol.bg};${grab}">
@@ -500,7 +522,10 @@ function renderCeldaDia(fecha) {
   const esHoy = fecha === hoy;
   const [_y,_m,_d] = fecha.split("-").map(Number);
   const esFinde = [0,6].includes(new Date(_y, _m-1, _d).getDay());
-  const sinCubrirDia = data.asignaciones.length === 0;
+  // Sin cobertura real: los turnos pendientes no cuentan (pero el cartel "Sin cubrir"
+  // solo se muestra si el día está literalmente vacío, para no duplicar el aviso).
+  const sinCubrirDia = asigsReales(fecha).length === 0;
+  const diaVacio = data.asignaciones.length === 0;
 
   const asigsFiltradas = state.filtroMedico
     ? data.asignaciones.filter(a => String(a.medicoId) === state.filtroMedico)
@@ -520,7 +545,7 @@ function renderCeldaDia(fecha) {
   else if(esFinde) numClases += " finde";
 
   const asigHTML = asigsOrdenadas.map(a => renderAsigCelda(a, fecha)).join("");
-  const sinCubrirHTML = sinCubrirDia && !state.filtroMedico
+  const sinCubrirHTML = diaVacio && !state.filtroMedico
     ? `<div class="asig-sin-cubrir"><span style="font-size:0.6rem;color:#b91c1c;font-weight:600">Sin cubrir</span></div>`
     : "";
 
@@ -766,7 +791,9 @@ function renderModalDia() {
   const [__y,__m,__d] = fecha.split("-").map(Number);
   const nombreDia = DIAS_FULL[new Date(__y, __m-1, __d).getDay()];
 
-  const opsMedico = medicos.map(m => `<option value="${m.id}">${escHTML(m.sigla)} — ${escHTML(m.nombre)}</option>`).join("");
+  // El médico fantasma PENDIENTE se ofrece solo acá (no en el filtro ni en Equipo).
+  const opsMedico = medicos.map(m => `<option value="${m.id}">${escHTML(m.sigla)} — ${escHTML(m.nombre)}</option>`).join("")
+    + `<option value="0">⚠️ — PENDIENTE (turno sin cubrir)</option>`;
   const nHist = histGet(fecha).length;   // el botón de historial solo aparece si hay cambios registrados
   // Cuántos médicos de ESTE día están tildados: decide si "Intercambiar" es individual o de día completo.
   const uidsDia = (data.asignaciones || []).map(a => asigUid(a));
@@ -794,6 +821,31 @@ function renderModalDia() {
         const selEstilo = sel
           ? `background:#eff6ff;border:2px solid #2563eb`
           : `background:${rol.bg};border:1px solid ${rol.color}33`;
+        // Turno pendiente: en vez de nombre + horario, ofrece los selectores para cubrirlo.
+        if (esPendiente(a)) {
+          const estiloPen = sel ? `background:#eff6ff;border:2px solid #2563eb` : `background:#fef2f2;border:2px dashed #dc2626`;
+          const opsCubrir = medicos.map(mm => `<option value="${mm.id}">${escHTML(mm.sigla)} — ${escHTML(mm.nombre)}</option>`).join("");
+          const opsRolPen = ROLES_BASE.filter(r => r.id !== "PEN")
+            .map(r => `<option value="${r.id}" ${a.rol === r.id ? "selected" : ""}>${escHTML(r.desc)}</option>`).join("");
+          const faltaRol = a.rol === "PEN";
+          return `<div class="modal-dia-asig" style="${estiloPen};margin-bottom:6px">
+            <input type="checkbox" ${sel ? "checked" : ""} onchange="toggleSelMedico('${uid}')"
+              title="Seleccionar para intercambiar solo este turno"
+              style="width:17px;height:17px;margin-right:2px;cursor:pointer;accent-color:#2563eb;flex:0 0 auto">
+            <div class="modal-dia-asig-info">
+              <div style="font-size:0.82rem;font-weight:700;color:#b91c1c">⚠️ Pendiente de cubrir${faltaRol ? "" : ` — ${escHTML(rol.desc)} ${escHTML(horarioDe(a))}`}</div>
+              <div style="display:flex;gap:6px;margin-top:5px;flex-wrap:wrap;align-items:center">
+                <select class="form-select" style="font-size:0.72rem;padding:2px 6px;width:auto" onchange="cubrirPendiente('${fecha}','${uid}',this.value)">
+                  <option value="">Cubrir con…</option>${opsCubrir}
+                </select>
+                ${faltaRol ? `<select class="form-select" style="font-size:0.72rem;padding:2px 6px;width:auto" onchange="cambiarRolAsig('${fecha}','${uid}',this.value)">
+                  <option value="">Turno…</option>${opsRolPen}
+                </select>` : ""}
+              </div>
+            </div>
+            <button onclick="quitarAsignacion('${fecha}','${uid}')" style="background:#fef2f2;border:none;color:#b91c1c;border-radius:5px;padding:3px 9px;cursor:pointer;font-size:0.75rem;font-weight:600">Quitar</button>
+          </div>`;
+        }
         return `<div class="modal-dia-asig" style="${selEstilo};margin-bottom:6px">
           <input type="checkbox" ${sel ? "checked" : ""} onchange="toggleSelMedico('${uid}')"
             title="Seleccionar para intercambiar solo a este médico"
@@ -847,6 +899,7 @@ function renderModalDia() {
               <optgroup label="── Especial">
                 <option value="POL">🏥 Policlínica PA</option>
                 <option value="INT">🎓 Interno / Estudiante</option>
+                <option value="PEN">⚠️ Pendiente de cubrir</option>
               </optgroup>
             </select>
           </div>
@@ -1083,7 +1136,7 @@ function pendientesMes() {
   ausGet().forEach(a => {
     for (let d = a.desde; d <= a.hasta; d++) {
       const f = fechaDeDia(d);
-      if (!(diaData(f).asignaciones || []).length) dias.add(d);
+      if (!asigsReales(f).length) dias.add(d);
     }
   });
   return dias.size;
@@ -1091,7 +1144,7 @@ function pendientesMes() {
 function diaAusSinCubrir(fecha) {
   const aus = ausDeDia(fecha);
   if (!aus.length) return false;
-  const cubierto = (diaData(fecha).asignaciones || []).length > 0;
+  const cubierto = asigsReales(fecha).length > 0;
   return !cubierto;   // hay ausencia y no hay médico asignado (reemplazo)
 }
 function abrirAusencias() { state.ausPanel = true; render(); }
@@ -1216,13 +1269,37 @@ function cerrarModalDia() {
 }
 
 function agregarAsignacionModal(fecha) {
-  const medicoId = document.getElementById("add-medico-sel").value;
+  let medicoId = document.getElementById("add-medico-sel").value;
   const rol = document.getElementById("add-rol-sel").value;
-  if(!medicoId) return;
+  // Con el rol "⚠️ Pendiente de cubrir" no hace falta elegir médico: se usa el fantasma.
+  if (rol === "PEN" && medicoId === "") medicoId = "0";
+  if(medicoId === "" || medicoId == null) return;
   if(!state.calendario[fecha]) state.calendario[fecha] = {asignaciones:[], notas:""};
   state.calendario[fecha].asignaciones.push({medicoId:Number(medicoId), rol, id:Date.now()});
   const nom = getMedico(medicoId) ? getMedico(medicoId).nombre : "médico";
-  histLog(fecha, `➕ ${nom} agregado (${getRol(rol).desc})`, "");   // MEJORA 5
+  histLog(fecha, esPendiente({medicoId:Number(medicoId), rol}) ? `⚠️ Turno pendiente agregado (${getRol(rol).desc})` : `➕ ${nom} agregado (${getRol(rol).desc})`, "");   // MEJORA 5
+  guardarEstado();
+  render();
+}
+
+// ─── CUBRIR UN TURNO PENDIENTE ───────────────────────────────
+// Reemplaza el médico fantasma por el médico real, sin tocar rol ni horario del turno.
+function cubrirPendiente(fecha, uid, medicoId) {
+  const a = asigPorUid(fecha, uid);
+  if (!a || !medicoId) return;
+  const m = getMedico(medicoId);
+  if (!m) return;
+  a.medicoId = Number(medicoId);
+  histLog(fecha, `✅ Turno pendiente cubierto por ${m.nombre}`, "");
+  guardarEstado();
+  render();
+}
+// Cambia el rol/turno de una asignación (se usa para definir el turno de un pendiente).
+function cambiarRolAsig(fecha, uid, rol) {
+  const a = asigPorUid(fecha, uid);
+  if (!a || !rol) return;
+  a.rol = rol;
+  histLog(fecha, `🕑 Turno pendiente definido como ${getRol(rol).desc}`, "");
   guardarEstado();
   render();
 }
@@ -1473,7 +1550,7 @@ function renderModalAusencias() {
     ? arr.map(a => {
         const m = getMedico(a.medicoId); const ti = tipoAus(a.tipo);
         const rango = a.desde === a.hasta ? `día ${a.desde}` : `días ${a.desde}–${a.hasta}`;
-        let sinCubrir = 0; for (let d = a.desde; d <= a.hasta; d++) if (!(diaData(fechaDeDia(d)).asignaciones || []).length) sinCubrir++;
+        let sinCubrir = 0; for (let d = a.desde; d <= a.hasta; d++) if (!asigsReales(fechaDeDia(d)).length) sinCubrir++;
         const alerta = sinCubrir > 0 ? `<span style="color:#dc2626;font-weight:700;font-size:0.7rem"> · ⚠️ ${sinCubrir} sin cubrir</span>` : "";
         return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #eee">
           <span style="font-size:0.9rem">${ti.emoji}</span>
@@ -1512,7 +1589,7 @@ function renderModalAusDetalle() {
   if (!state.ausDetalleFecha) return "";
   const fecha = state.ausDetalleFecha;
   const aus = ausDeDia(fecha);
-  const cubierto = (diaData(fecha).asignaciones || []).length > 0;
+  const cubierto = asigsReales(fecha).length > 0;
   const filas = aus.map(a => {
     const m = getMedico(a.medicoId); const ti = tipoAus(a.tipo);
     const rango = a.desde === a.hasta ? `día ${a.desde}` : `días ${a.desde}–${a.hasta}`;
@@ -1704,6 +1781,7 @@ function resumenHoras() {
   const cal = state.calendario || {};
   Object.keys(cal).forEach(fecha => {
     (cal[fecha].asignaciones || []).forEach(a => {
+      if (esPendiente(a)) return;   // un turno sin cubrir no suma horas a nadie
       const m = getMedico(a.medicoId); if (!m) return;
       if (!acc[m.id]) acc[m.id] = { medico: m, guardias: 0, horas: 0 };
       acc[m.id].guardias += 1;
