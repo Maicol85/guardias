@@ -247,6 +247,9 @@ let state = {
   editHorario: null,
   copiarDiaOrigen: null,
   swapDiaOrigen: null,
+  medicoSelModal: new Set(),   // uids tildados en el modal del día abierto
+  swapMedicoOrigen: null,      // { fecha, uids:[] } — intercambio de médicos puntuales
+  swapMedicoDestino: null,     // fecha destino elegida, mientras se arma el emparejamiento
   modoCal: "mes",       // "mes" | "semana"
   semanaAncla: null,    // fecha ancla de la vista semanal
   histModal: null,      // fecha cuyo historial se muestra
@@ -523,8 +526,10 @@ function renderCeldaDia(fecha) {
 
   // MEJORA 1/4: resaltar día origen cuando se está copiando o intercambiando
   // En modo swap: origen en verde sólido, destinos posibles en borde punteado naranja con cursor especial
-  const esSwapOrigen = state.swapDiaOrigen === fecha;
-  const esSwapDestino = state.swapDiaOrigen && state.swapDiaOrigen !== fecha;
+  // El resaltado es el mismo para el swap de día completo y para el de médicos puntuales.
+  const swapOrigenActivo = state.swapDiaOrigen || (state.swapMedicoOrigen && state.swapMedicoOrigen.fecha);
+  const esSwapOrigen = swapOrigenActivo === fecha;
+  const esSwapDestino = swapOrigenActivo && swapOrigenActivo !== fecha;
   const esCopyOrigen = state.copiarDiaOrigen === fecha;
   const copiaStyle = esCopyOrigen ? ";outline:3px solid #2563eb;outline-offset:-3px;background:#eff6ff"
     : esSwapOrigen ? ";outline:3px solid #16a34a;outline-offset:-3px;background:#f0fdf4"
@@ -659,6 +664,10 @@ function renderCalendario() {
       <span style="font-size:0.85rem;color:#166534;font-weight:700">🔄 Modo intercambio activo — Día ${dnum(state.swapDiaOrigen)} seleccionado &nbsp;→&nbsp; hacé clic directo en el día destino del calendario</span>
       <button class="btn btn-secondary btn-sm" onclick="cancelarSwapDia()">✕ Cancelar</button>
     </div>` : ""}
+    ${state.swapMedicoOrigen ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#f0fdf4;border:2px solid #16a34a;border-radius:8px;padding:10px 14px;margin-bottom:10px">
+      <span style="font-size:0.85rem;color:#166534;font-weight:700">🔄 Intercambio — ${escHTML(nombresDeUids(state.swapMedicoOrigen.fecha, state.swapMedicoOrigen.uids).join(", "))} (Día ${dnum(state.swapMedicoOrigen.fecha)}) &nbsp;→&nbsp; clickeá el día destino</span>
+      <button class="btn btn-secondary btn-sm" onclick="cancelarSwapMedicos()">✕ Cancelar</button>
+    </div>` : ""}
     <div class="nota-mes-wrap">${notaMesHTML}</div>
     <div class="leyenda">${leyendaHTML}</div>
 
@@ -759,6 +768,9 @@ function renderModalDia() {
 
   const opsMedico = medicos.map(m => `<option value="${m.id}">${escHTML(m.sigla)} — ${escHTML(m.nombre)}</option>`).join("");
   const nHist = histGet(fecha).length;   // el botón de historial solo aparece si hay cambios registrados
+  // Cuántos médicos de ESTE día están tildados: decide si "Intercambiar" es individual o de día completo.
+  const uidsDia = (data.asignaciones || []).map(a => asigUid(a));
+  const nSel = uidsDia.filter(u => state.medicoSelModal.has(u)).length;
 
   const asigsHTML = data.asignaciones.length === 0
     ? `<div style="padding:14px;text-align:center;color:#6b7280;font-size:0.82rem;background:#fef2f2;border-radius:7px;border:1px dashed #b91c1c">Sin médicos asignados este día</div>`
@@ -777,7 +789,15 @@ function renderModalDia() {
                style="font-size:0.7rem;font-weight:600;width:88px;padding:1px 5px;border:1px solid ${rol.color};border-radius:4px;color:${rol.color}">`
           : `<span onclick="editarHorario('${fecha}','${uid}')" title="Click para editar el horario"
                style="cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px">${escHTML(horarioDe(a))}</span>`;
-        return `<div class="modal-dia-asig" style="background:${rol.bg};border:1px solid ${rol.color}33;margin-bottom:6px">
+        // Selección para intercambio individual: fondo celeste + borde azul cuando está tildado.
+        const sel = state.medicoSelModal.has(uid);
+        const selEstilo = sel
+          ? `background:#eff6ff;border:2px solid #2563eb`
+          : `background:${rol.bg};border:1px solid ${rol.color}33`;
+        return `<div class="modal-dia-asig" style="${selEstilo};margin-bottom:6px">
+          <input type="checkbox" ${sel ? "checked" : ""} onchange="toggleSelMedico('${uid}')"
+            title="Seleccionar para intercambiar solo a este médico"
+            style="width:17px;height:17px;margin-right:2px;cursor:pointer;accent-color:#2563eb;flex:0 0 auto">
           ${renderAvatar(m,30)}
           <div class="modal-dia-asig-info">
             <div style="font-size:0.85rem;font-weight:600;color:#1e293b">${escHTML(m.nombre)}</div>
@@ -792,7 +812,7 @@ function renderModalDia() {
       <div class="modal-dia-header">
         <div>
           <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">${nombreDia} ${dia} de ${MESES[state.mes]}</div>
-          <div style="font-size:0.72rem;color:#6b7280;margin-top:2px">Click en el horario para editarlo · Quitar para eliminar</div>
+          <div style="font-size:0.72rem;color:#6b7280;margin-top:2px">Click en el horario para editarlo · Tildá médicos para intercambiar solo esos</div>
         </div>
         <button onclick="cerrarModalDia()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
       </div>
@@ -836,7 +856,9 @@ function renderModalDia() {
 
       <div style="border-top:1px solid #d1d5db;padding-top:14px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <button class="btn btn-secondary" onclick="iniciarCopiarDia('${fecha}')">📋 Copiar día</button>
-        <button class="btn btn-secondary" onclick="iniciarSwapDia('${fecha}')">🔄 Intercambiar</button>
+        <button class="btn btn-secondary" onclick="iniciarIntercambio('${fecha}')"
+          title="${nSel ? `Intercambiar solo los ${nSel} médico(s) tildados` : "Sin médicos tildados: intercambia el día completo"}">🔄 Intercambiar${nSel ? ` (${nSel})` : ""}</button>
+        <div style="grid-column:1/-1;font-size:0.68rem;color:#6b7280;margin-top:-2px">${nSel ? `Se intercambiarán solo los ${nSel} médico(s) tildados.` : "Sin tildar nada, se intercambia el día completo."}</div>
         ${nHist ? `<button class="btn btn-secondary" style="grid-column:1/-1" title="${nHist} cambio${nHist !== 1 ? "s" : ""} registrado${nHist !== 1 ? "s" : ""} en este día" onclick="abrirHistorial('${fecha}',event)">📜 Ver historial</button>` : ""}
       </div>
 
@@ -974,6 +996,7 @@ function render() {
       ${renderModalHist()}
       ${renderModalAusencias()}
       ${renderModalAusDetalle()}
+      ${renderModalSwapMedico()}
     </div>`;
 
   // Restaurar filtro médico
@@ -997,6 +1020,7 @@ function cerrarSesionJefe() {
   try { sessionStorage.removeItem("guardias_jefe"); } catch(e) {}
   state.jefe = false; state.view = "calendario"; state.modalDia = null;
   state.copiarDiaOrigen = null; state.swapDiaOrigen = null;
+  state.swapMedicoOrigen = null; state.swapMedicoDestino = null; state.medicoSelModal = new Set();
   render();
 }
 
@@ -1181,11 +1205,13 @@ function rehacerMesDesdePatron() {
 
 function abrirModalDia(fecha) {
   state.modalDia = fecha;
+  state.medicoSelModal = new Set();   // la selección es por apertura de modal, no persiste
   render();
 }
 
 function cerrarModalDia() {
   state.modalDia = null;
+  state.medicoSelModal = new Set();
   render();
 }
 
@@ -1268,6 +1294,11 @@ function clickDia(fecha) {
   if (state.swapDiaOrigen) {
     if (fecha === state.swapDiaOrigen) { cancelarSwapDia(); return; }
     swapDiaDestino(fecha);
+    return;
+  }
+  if (state.swapMedicoOrigen) {
+    if (fecha === state.swapMedicoOrigen.fecha) { cancelarSwapMedicos(); return; }   // clic en el origen = cancelar
+    abrirSwapMedicoPicker(fecha);
     return;
   }
   abrirModalDia(fecha);
@@ -1517,6 +1548,145 @@ function swapDiaDestino(destino) {
   state.swapDiaOrigen = null;
   histLog(origen, `🔄 Intercambio con día ${dnum(destino)}`, motivo);
   histLog(destino, `🔄 Intercambio con día ${dnum(origen)}`, motivo);
+  guardarEstado();
+  render();
+}
+
+// ─── INTERCAMBIO INDIVIDUAL DE MÉDICOS ───────────────────────
+// El botón "🔄 Intercambiar" del modal decide el modo según haya o no médicos tildados:
+//   con tildados  → intercambio individual (este bloque)
+//   sin tildados  → intercambio de día completo (swapDiaOrigen, sin cambios)
+function toggleSelMedico(uid) {
+  if (state.medicoSelModal.has(uid)) state.medicoSelModal.delete(uid);
+  else state.medicoSelModal.add(uid);
+  render();
+}
+function iniciarIntercambio(fecha) {
+  const uids = (diaData(fecha).asignaciones || []).map(a => asigUid(a)).filter(u => state.medicoSelModal.has(u));
+  if (uids.length) iniciarSwapMedicos(fecha, uids);
+  else iniciarSwapDia(fecha);         // comportamiento de siempre
+}
+function iniciarSwapMedicos(fecha, uids) {
+  state.swapMedicoOrigen = { fecha, uids };
+  state.modalDia = null;              // cerrar el modal para elegir el día destino
+  state.medicoSelModal = new Set();
+  render();
+}
+function cancelarSwapMedicos() {
+  state.swapMedicoOrigen = null;
+  state.swapMedicoDestino = null;
+  render();
+}
+// Nombres de los médicos seleccionados, para el banner y los mensajes.
+function nombresDeUids(fecha, uids) {
+  return uids.map(u => {
+    const a = asigPorUid(fecha, u);
+    const m = a ? getMedico(a.medicoId) : null;
+    return m ? m.nombre : "—";
+  });
+}
+// El usuario hizo clic en el día destino: se abre el emparejamiento.
+function abrirSwapMedicoPicker(destino) {
+  if (!(diaData(destino).asignaciones || []).length) {
+    alert(`El día ${dnum(destino)} no tiene médicos asignados, no hay con quién intercambiar.`);
+    return;
+  }
+  state.swapMedicoDestino = destino;
+  render();
+}
+function renderModalSwapMedico() {
+  if (!state.swapMedicoOrigen || !state.swapMedicoDestino) return "";
+  const { fecha: origen, uids } = state.swapMedicoOrigen;
+  const destino = state.swapMedicoDestino;
+  const asigsDestino = ordenarAsignaciones(diaData(destino).asignaciones);
+
+  const filas = uids.map((u, i) => {
+    const a = asigPorUid(origen, u);
+    if (!a) return "";
+    const m = getMedico(a.medicoId);
+    const rol = getRol(a.rol);
+    if (!m) return "";
+    const ops = asigsDestino.map(d => {
+      const dm = getMedico(d.medicoId);
+      const dr = getRol(d.rol);
+      return dm ? `<option value="${asigUid(d)}">${escHTML(dm.nombre)} — ${escHTML(dr.desc)} ${escHTML(horarioDe(d))}</option>` : "";
+    }).join("");
+    return `<div style="display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #eee">
+      <div>
+        <div style="font-size:0.82rem;font-weight:600;color:#111827">${escHTML(m.nombre)}</div>
+        <div style="font-size:0.7rem;color:${rol.color};font-weight:600">${escHTML(rol.desc)} — ${escHTML(horarioDe(a))}</div>
+      </div>
+      <span style="font-size:0.9rem;color:#6b7280">⇄</span>
+      <select class="form-select" id="swapmed-${i}" data-uid-origen="${u}" style="font-size:0.78rem">
+        <option value="">— sin intercambio —</option>
+        ${ops}
+      </select>
+    </div>`;
+  }).join("");
+
+  return `<div class="modal-bg" onclick="if(event.target===this)cerrarSwapMedicoPicker()">
+    <div class="modal-box" style="max-width:560px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">🔄 Intercambiar — día ${dnum(origen)} ⇄ día ${dnum(destino)}</div>
+        <button onclick="cerrarSwapMedicoPicker()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+      </div>
+      <div style="font-size:0.72rem;color:#6b7280;margin-bottom:12px;line-height:1.5">
+        Elegí con qué médico del día ${dnum(destino)} se intercambia cada uno.
+        Los turnos no se mueven: cada médico pasa a ocupar el rol y horario del otro.
+      </div>
+      <div style="max-height:46vh;overflow:auto;margin-bottom:14px">${filas}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button class="btn btn-primary" onclick="ejecutarSwapMedicos()">✅ Confirmar intercambio</button>
+        <button class="btn btn-secondary" onclick="cerrarSwapMedicoPicker()">Cancelar</button>
+      </div>
+    </div>
+  </div>`;
+}
+function cerrarSwapMedicoPicker() {
+  state.swapMedicoDestino = null;
+  render();   // vuelve al banner: se puede elegir otro día destino
+}
+function ejecutarSwapMedicos() {
+  const { fecha: origen, uids } = state.swapMedicoOrigen;
+  const destino = state.swapMedicoDestino;
+
+  // Leer el emparejamiento elegido en los selects.
+  const pares = [];
+  uids.forEach((u, i) => {
+    const sel = document.getElementById(`swapmed-${i}`);
+    if (sel && sel.value) pares.push({ uidOrigen: u, uidDestino: sel.value });
+  });
+  if (!pares.length) { alert("No elegiste ningún intercambio."); return; }
+
+  // Un mismo médico del destino no puede recibir dos intercambios.
+  const destinosElegidos = pares.map(p => p.uidDestino);
+  if (new Set(destinosElegidos).size !== destinosElegidos.length) {
+    alert("Elegiste el mismo médico de destino más de una vez. Revisá el emparejamiento.");
+    return;
+  }
+
+  const motivo = pedirMotivo();
+  const detalle = [];
+  pares.forEach(p => {
+    const a = asigPorUid(origen, p.uidOrigen);
+    const b = asigPorUid(destino, p.uidDestino);
+    if (!a || !b) return;
+    const nomA = getMedico(a.medicoId) ? getMedico(a.medicoId).nombre : "médico";
+    const nomB = getMedico(b.medicoId) ? getMedico(b.medicoId).nombre : "médico";
+    // Se permutan SOLO los médicos: rol, horario y uid quedan con el turno de cada día,
+    // así el destino conserva sus roles y horarios (y el origen los suyos).
+    const tmp = a.medicoId;
+    a.medicoId = b.medicoId;
+    b.medicoId = tmp;
+    detalle.push(`${nomA} ⇄ ${nomB}`);
+  });
+  if (!detalle.length) { alert("No se pudo resolver el intercambio."); return; }
+
+  histLog(origen,  `🔄 Intercambio con día ${dnum(destino)}: ${detalle.join(" · ")}`, motivo);
+  histLog(destino, `🔄 Intercambio con día ${dnum(origen)}: ${detalle.join(" · ")}`, motivo);
+
+  state.swapMedicoOrigen = null;
+  state.swapMedicoDestino = null;
   guardarEstado();
   render();
 }
