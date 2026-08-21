@@ -538,7 +538,6 @@ function renderCeldaDia(fecha) {
       <span class="${numClases}">${dia}</span>
       <div class="cal-flags">
         ${data.notas ? `<span style="font-size:0.55rem;color:#b45309;font-weight:700">📌</span>` : ""}
-        ${histGet(fecha).length ? `<span onclick="abrirHistorial('${fecha}',event)" title="Ver historial de cambios" style="font-size:0.58rem;cursor:pointer">📜</span>` : ""}
         ${(function(){ const aus = ausDeDia(fecha); if (!aus.length) return ""; const tipos = [...new Set(aus.map(a => a.tipo))]; return `<span onclick="abrirAusDetalle('${fecha}',event)" title="${aus.length} ausencia(s) — ver detalle" style="font-size:0.58rem;cursor:pointer">${tipos.map(t => tipoAus(t).emoji).join("")}</span>`; })()}
         ${sinCubrirDia && !state.filtroMedico ? `<span style="font-size:0.58rem;color:#b91c1c;font-weight:700">!</span>` : ""}
       </div>
@@ -759,6 +758,7 @@ function renderModalDia() {
   const nombreDia = DIAS_FULL[new Date(__y, __m-1, __d).getDay()];
 
   const opsMedico = medicos.map(m => `<option value="${m.id}">${escHTML(m.sigla)} — ${escHTML(m.nombre)}</option>`).join("");
+  const nHist = histGet(fecha).length;   // el botón de historial solo aparece si hay cambios registrados
 
   const asigsHTML = data.asignaciones.length === 0
     ? `<div style="padding:14px;text-align:center;color:#6b7280;font-size:0.82rem;background:#fef2f2;border-radius:7px;border:1px dashed #b91c1c">Sin médicos asignados este día</div>`
@@ -837,6 +837,7 @@ function renderModalDia() {
       <div style="border-top:1px solid #d1d5db;padding-top:14px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <button class="btn btn-secondary" onclick="iniciarCopiarDia('${fecha}')">📋 Copiar día</button>
         <button class="btn btn-secondary" onclick="iniciarSwapDia('${fecha}')">🔄 Intercambiar</button>
+        ${nHist ? `<button class="btn btn-secondary" style="grid-column:1/-1" title="${nHist} cambio${nHist !== 1 ? "s" : ""} registrado${nHist !== 1 ? "s" : ""} en este día" onclick="abrirHistorial('${fecha}',event)">📜 Ver historial</button>` : ""}
       </div>
 
       <div style="border-top:1px solid #d1d5db;padding-top:14px">
