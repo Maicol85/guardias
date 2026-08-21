@@ -483,9 +483,25 @@ function diaData(fecha) {
   return state.calendario[fecha] || {asignaciones:[], notas:""};
 }
 
+// ¿La asignación es un turno de GUARDIA? (D12/N12 o cualquier rol del grupo "Guardia").
+function esGuardia(a) { return !!a && getRol(a.rol).grupo === "Guardia"; }
+
+// PUNTO 3 — Un día cuenta como "sin cubrir" si le falta cobertura de GUARDIA:
+//   · está literalmente vacío, o
+//   · tiene al menos un turno de guardia marcado como ⚠️ Pendiente.
+// Los apoyos/especiales pendientes NO lo hacen contar.
+function diaSinCubrir(fecha) {
+  const asigs = diaData(fecha).asignaciones || [];
+  if (!asigs.length) return true;
+  return asigs.some(a => esGuardia(a) && esPendiente(a));
+}
 function sinCubrir() {
-  // Un día con solo turnos "⚠️ Pendiente" sigue contando como sin cubrir.
-  return Object.keys(state.calendario).filter(f => asigsReales(f).length === 0).length;
+  return Object.keys(state.calendario || {}).filter(f => diaSinCubrir(f)).length;
+}
+// PUNTO 2 — Total de turnos pendientes del mes (rol PEN o médico fantasma), de cualquier tipo.
+function turnosPendientesMes() {
+  return Object.keys(state.calendario || {}).reduce(
+    (n, f) => n + (diaData(f).asignaciones || []).filter(esPendiente).length, 0);
 }
 
 function getStats() {
@@ -581,7 +597,7 @@ function renderCeldaDia(fecha) {
   const esFinde = [0,6].includes(new Date(_y, _m-1, _d).getDay());
   // Sin cobertura real: los turnos pendientes no cuentan (pero el cartel "Sin cubrir"
   // solo se muestra si el día está literalmente vacío, para no duplicar el aviso).
-  const sinCubrirDia = asigsReales(fecha).length === 0;
+  const sinCubrirDia = diaSinCubrir(fecha);   // misma regla que el badge del header (PUNTO 3)
   const diaVacio = data.asignaciones.length === 0;
 
   const asigsFiltradas = state.filtroMedico
@@ -715,6 +731,7 @@ function renderCalendario() {
       </div>
       <div class="toolbar-right">
         ${sc > 0 ? `<div class="badge-alerta" style="cursor:pointer" title="Ir al primer día sin cubrir" onclick="irPrimerSinCubrir()">⚠️ ${sc} día${sc!==1?"s":""} sin cubrir</div>` : ""}
+        ${(function(){ const tp = turnosPendientesMes(); return tp > 0 ? `<div class="badge-alerta" style="background:#b45309" title="Turnos marcados como pendientes de cubrir en el mes">⚠️ ${tp} turno${tp!==1?"s":""} pendiente${tp!==1?"s":""}</div>` : ""; })()}
         <select class="filtro-select" onchange="state.filtroMedico=this.value;render()">
           <option value="">Todos los médicos</option>
           ${opsMedico}
@@ -1196,6 +1213,7 @@ function render() {
         </div>
         <div style="display:flex;gap:8px;align-items:center">
           ${sc > 0 ? `<div class="badge-alerta" style="cursor:pointer" title="Ir al primer día sin cubrir" onclick="irPrimerSinCubrir()">⚠️ ${sc} día${sc!==1?"s":""} sin cubrir</div>` : ""}
+        ${(function(){ const tp = turnosPendientesMes(); return tp > 0 ? `<div class="badge-alerta" style="background:#b45309" title="Turnos marcados como pendientes de cubrir en el mes">⚠️ ${tp} turno${tp!==1?"s":""} pendiente${tp!==1?"s":""}</div>` : ""; })()}
           ${(function(){ const p = pendientesMes(); return `<button class="btn btn-secondary btn-sm" onclick="abrirAusencias()" title="Ausencias y solicitudes" style="position:relative">📋 Ausencias${p > 0 ? `<span style="position:absolute;top:-6px;right:-6px;background:#dc2626;color:#fff;border-radius:999px;min-width:16px;height:16px;font-size:0.6rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 3px">${p}</span>` : ""}</button>`; })()}
           ${state.jefe
             ? `<button class="btn btn-secondary btn-sm" onclick="cerrarSesionJefe()" title="Volver a modo solo lectura">🔓 Cerrar sesión</button>`
@@ -2163,7 +2181,7 @@ ${notasHTML}
 function irPrimerSinCubrir() {
   if(state.view !== "calendario") { state.view = "calendario"; render(); }
   const fechas = Object.keys(state.calendario).sort();
-  const primera = fechas.find(f => diaData(f).asignaciones.length === 0);
+  const primera = fechas.find(f => diaSinCubrir(f));
   if(!primera) return;
   const el = document.getElementById("cell-" + primera);
   if(el) {
