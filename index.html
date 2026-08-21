@@ -353,19 +353,35 @@ function aplicarPatronMes(anio, mes) {
 function cargarAgosto2026() { return aplicarPatronMes(2026, 7); }
 
 // ─── CAMBIO 4: PATRÓN POR DÍA DE SEMANA DESDE UN MES REAL ────
-// Extrae de un calendario guardado el "molde" de cada día de semana (base-lunes 0=Lun … 6=Dom):
-// se toma el PRIMER día del mes que cae en ese día de semana y tiene guardias cargadas.
-function patronDeCalendario(cal) {
-  const patron = {};
-  Object.keys(cal || {}).sort().forEach(f => {
+const DOW_NOMBRE = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];   // base-lunes 0=Lun … 6=Dom
+
+// Calendario de un mes: primero el que está en memoria, si no el guardado en localStorage.
+function calDelMes(anio, mes) {
+  return state.historialMeses[`${anio}-${mes}`] || cargarCalMes(anio, mes) || {};
+}
+
+// Extrae de un calendario el "molde" de cada día de semana: para cada día de semana se toma
+// el PRIMER día del mes que cae en ese día de semana y tiene guardias cargadas.
+// Ojo: NO es el día 1, 2, 3… del mes — es el primer lunes real, el primer martes real, etc.
+// Devuelve { [dow]: { fecha, dia, asignaciones } } para que la vista previa pueda mostrar
+// exactamente el mismo molde que se va a aplicar.
+function moldesDeCalendario(cal) {
+  const moldes = {};
+  Object.keys(cal || {}).sort().forEach(f => {          // orden cronológico (las claves son AAAA-MM-DD)
     const [y, m, d] = f.split("-").map(Number);
     if (!y || !m || !d) return;
     const dow = (new Date(y, m - 1, d).getDay() + 6) % 7;   // base-lunes
-    if (patron[dow]) return;                                 // ya se tomó el primero de ese día de semana
+    if (moldes[dow]) return;                                 // ya se tomó el primero de ese día de semana
     const asigs = (cal[f] && cal[f].asignaciones) || [];
     if (!asigs.length) return;                               // día vacío: seguir buscando el siguiente igual
-    patron[dow] = asigs;
+    moldes[dow] = { fecha: f, dia: d, asignaciones: asigs };
   });
+  return moldes;
+}
+function patronDeCalendario(cal) {
+  const patron = {};
+  const moldes = moldesDeCalendario(cal);
+  Object.keys(moldes).forEach(dow => { patron[dow] = moldes[dow].asignaciones; });
   return patron;
 }
 // Genera el mes nuevo replicando, para cada fecha, el molde de SU día de semana.
@@ -834,24 +850,27 @@ function renderModalDia() {
 function renderModalCopiar() {
   if(!state.modalCopiar) return "";
   const {anioNuevo, mesNuevo, anioOrigen, mesOrigen} = state.modalCopiar;
-  const calOrigen = state.historialMeses[`${anioOrigen}-${mesOrigen}`] || {};
 
-  const previewHTML = Object.entries(calOrigen)
-    .filter(([,d]) => d.asignaciones?.length > 0)
-    .slice(0,4)
-    .map(([fecha,d]) => {
-      const dia = Number(fecha.split("-")[2]);
-      const chips = d.asignaciones.slice(0,4).map(a => {
-        const m = getMedico(a.medicoId);
-        const r = getRol(a.rol);
-        return m ? `<span style="font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:3px;background:${r.bg};color:#334155">${m.sigla} ${a.rol}</span>` : "";
-      }).join("");
-      const extra = d.asignaciones.length > 4 ? `<span style="font-size:0.65rem;color:#6b7280">+${d.asignaciones.length-4}</span>` : "";
-      return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
-        <span style="font-size:0.72rem;font-weight:600;color:#374151;min-width:40px">Día ${dia}</span>
-        <div style="display:flex;gap:4px;flex-wrap:wrap">${chips}${extra}</div>
-      </div>`;
-    }).join("");
+  // La vista previa sale del MISMO molde que usa aplicarCopia(true): una fila por día de semana,
+  // con los médicos del primer lunes real, primer martes real, etc. del mes origen.
+  const moldes = moldesDeCalendario(calDelMes(anioOrigen, mesOrigen));
+
+  const previewHTML = DOW_NOMBRE.map((nombreDow, dow) => {
+    const molde = moldes[dow];
+    const cuerpo = molde
+      ? ordenarAsignaciones(molde.asignaciones).map(a => {
+          const m = getMedico(a.medicoId);
+          const r = getRol(a.rol);
+          return m ? `<span title="${escAttr(m.nombre + " — " + horarioDe(a))}" style="font-size:0.65rem;font-weight:700;padding:1px 6px;border-radius:3px;background:${r.bg};color:#334155">${escHTML(m.sigla)} ${escHTML(a.rol)}</span>` : "";
+        }).join("")
+      : `<span style="font-size:0.65rem;color:#9ca3af">— sin guardias en ${MESES[mesOrigen]}</span>`;
+    const origen = molde ? `<span style="font-size:0.62rem;color:#9ca3af;white-space:nowrap">(día ${molde.dia})</span>` : "";
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+      <span style="font-size:0.72rem;font-weight:600;color:#374151;min-width:66px">${nombreDow}</span>
+      ${origen}
+      <div style="display:flex;gap:4px;flex-wrap:wrap">${cuerpo}</div>
+    </div>`;
+  }).join("");
 
   return `<div class="modal-bg">
     <div class="modal-box modal-copiar">
@@ -861,9 +880,9 @@ function renderModalCopiar() {
         ¿Querés usar la disposición de <strong style="color:#111827">${MESES[mesOrigen]} ${anioOrigen}</strong> como base?
       </div>
       <div class="modal-preview">
-        <div style="font-size:0.7rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Vista previa — ${MESES[mesOrigen]}</div>
+        <div style="font-size:0.7rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Vista previa — patrón de ${MESES[mesOrigen]} por día de semana</div>
         ${previewHTML}
-        <div style="font-size:0.68rem;color:#6b7280;margin-top:6px">Se copiarán las asignaciones por día de semana. Podrás editar cada día.</div>
+        <div style="font-size:0.68rem;color:#6b7280;margin-top:6px">Cada día de ${MESES[mesNuevo]} recibe el molde de su día de semana (entre paréntesis, el día de ${MESES[mesOrigen]} de donde sale). Podrás editar cada día.</div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <button class="btn btn-primary" onclick="aplicarCopia(true)">✅ Sí, usar como base</button>
@@ -1123,9 +1142,7 @@ function aplicarCopia(copiar) {
   // CAMBIO 4: se copia POR DÍA DE SEMANA usando el calendario REAL del mes anterior
   // (no posición a posición, y no el patrón hardcodeado): todos los lunes del mes nuevo
   // quedan como el primer lunes del mes origen, todos los martes como el primer martes, etc.
-  const calOrigen = state.historialMeses[`${anioOrigen}-${mesOrigen}`]
-    || cargarCalMes(anioOrigen, mesOrigen)
-    || {};
+  const calOrigen = calDelMes(anioOrigen, mesOrigen);   // misma fuente que la vista previa del modal
   const calNuevo = copiar
     ? aplicarPatronDesdeCal(anioNuevo, mesNuevo, calOrigen)
     : generarMesVacio(anioNuevo, mesNuevo);
