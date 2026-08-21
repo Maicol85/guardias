@@ -637,6 +637,7 @@ function renderCalendario() {
         ${state.jefe ? `
         <button class="btn btn-secondary btn-sm" onclick="guardarPlantilla()" title="Guardar el patrón de este mes como plantilla">💾 Guardar plantilla</button>
         <button class="btn btn-secondary btn-sm" onclick="aplicarPlantilla()" title="Aplicar la plantilla guardada a este mes">📂 Aplicar plantilla</button>
+        <button class="btn btn-secondary btn-sm" onclick="rehacerMesDesdePatron()" title="Borra las guardias guardadas de este mes y lo vuelve a generar con el patrón del mes anterior">♻️ Rehacer mes</button>
         <button class="btn btn-secondary btn-sm" onclick="exportarMesJSON()">📤 Exportar mes</button>
         <button class="btn btn-secondary btn-sm" onclick="document.getElementById('import-json-input').click()">📥 Importar mes</button>
         <input type="file" id="import-json-input" accept="application/json,.json" style="display:none" onchange="importarMesJSON(event)">
@@ -1154,6 +1155,26 @@ function aplicarCopia(copiar) {
   state.mes = mesNuevo;
   state.modalCopiar = null;
   guardarEstado();
+  render();
+}
+
+// ─── REHACER MES (descarta lo guardado y vuelve a preguntar) ──
+// Sirve cuando el mes quedó con datos viejos de una versión anterior de la app:
+// como irAMes() carga lo que haya en localStorage, un mes ya guardado nunca vuelve
+// a mostrar el modal de "usar el mes anterior como base".
+function rehacerMesDesdePatron() {
+  const etiqueta = `${MESES[state.mes]} ${state.anio}`;
+  if (!confirm(`¿Borrar las guardias guardadas de ${etiqueta} y regenerarlo a partir del mes anterior?\n\nEsto descarta los cambios hechos a mano en ${etiqueta}. Las ausencias y el historial no se tocan.`)) return;
+
+  // Mes anterior (origen del patrón)
+  const anioOrigen = state.mes === 0 ? state.anio - 1 : state.anio;
+  const mesOrigen  = state.mes === 0 ? 11 : state.mes - 1;
+
+  try { localStorage.removeItem(calKey(state.anio, state.mes)); } catch (e) {}
+  delete state.historialMeses[`${state.anio}-${state.mes}`];
+
+  // Reusa exactamente el mismo camino que el modal de cambio de mes.
+  state.modalCopiar = { anioNuevo: state.anio, mesNuevo: state.mes, anioOrigen, mesOrigen };
   render();
 }
 
