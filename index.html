@@ -262,6 +262,7 @@ let state = {
   ausForm: { medicoId:"", tipo:"licencia", fDesde:"", fHasta:"", motivo:"" },
   nuevoMedico: { nombre:"", sigla:"", color:"#1d4ed8" },
   config: null,           // configuración del servicio (se carga en initPatronDefault)
+  modalPDF: null,         // opciones de exportación de PDF elegidas en el modal
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────
@@ -480,12 +481,13 @@ function esGuardia(a) { return !!a && getRol(a.rol).grupo === "Guardia"; }
 
 // PUNTO 3 — Un día cuenta como "sin cubrir" si le falta cobertura de GUARDIA:
 //   · está literalmente vacío, o
-//   · tiene al menos un turno de guardia marcado como ⚠️ Pendiente.
-// Los apoyos/especiales pendientes NO lo hacen contar.
+//   · tiene un turno de guardia marcado como ⚠️ Pendiente, o
+//   · tiene un rol PEN suelto (turno sin definir): si se marcó un pendiente, algo falta.
+// Los apoyos/especiales pendientes con turno definido NO lo hacen contar.
 function diaSinCubrir(fecha) {
   const asigs = diaData(fecha).asignaciones || [];
   if (!asigs.length) return true;
-  return asigs.some(a => esGuardia(a) && esPendiente(a));
+  return asigs.some(a => esPendiente(a) && (a.rol === "PEN" || esGuardia(a)));
 }
 function sinCubrir() {
   return Object.keys(state.calendario || {}).filter(f => diaSinCubrir(f)).length;
@@ -717,7 +719,7 @@ function renderCalendario() {
           <option value="">Todos los médicos</option>
           ${opsMedico}
         </select>
-        <button class="btn btn-secondary btn-sm" onclick="exportarPDF()">📄 Exportar PDF</button>
+        <button class="btn btn-secondary btn-sm" onclick="abrirModalPDF()">📄 Exportar PDF</button>
         ${state.jefe ? `
         <button class="btn btn-secondary btn-sm" onclick="guardarPlantilla()" title="Guardar el patrón de este mes como plantilla">💾 Guardar plantilla</button>
         <button class="btn btn-secondary btn-sm" onclick="aplicarPlantilla()" title="Aplicar la plantilla guardada a este mes">📂 Aplicar plantilla</button>
@@ -1221,6 +1223,7 @@ function render() {
       ${renderModalAusencias()}
       ${renderModalAusDetalle()}
       ${renderModalSwapMedico()}
+      ${renderModalPDF()}
     </div>`;
 
   // Restaurar filtro médico
@@ -2089,7 +2092,63 @@ function quitarMedico(id) {
 }
 
 // ─── EXPORTAR PDF ────────────────────────────────────────────
-function exportarPDF() {
+// ─── PUNTO 6: OPCIONES DE EXPORTACIÓN ────────────────────────
+function abrirModalPDF() {
+  state.modalPDF = { planilla: true, horas: false, notas: false };
+  render();
+}
+function cerrarModalPDF() { state.modalPDF = null; render(); }
+function togglePDFOpt(k) {
+  if (!state.modalPDF) return;
+  state.modalPDF[k] = !state.modalPDF[k];
+  render();
+}
+function confirmarExportarPDF() {
+  const o = state.modalPDF;
+  if (!o || (!o.planilla && !o.horas && !o.notas)) return;   // el botón ya está deshabilitado
+  const opciones = { ...o };
+  state.modalPDF = null;
+  render();
+  exportarPDF(opciones);
+}
+function renderModalPDF() {
+  if (!state.modalPDF) return "";
+  const o = state.modalPDF;
+  const hayNotas = !!cargarNotasMes().trim();
+  const hayHoras = resumenHoras().length > 0;
+  const nada = !o.planilla && !o.horas && !o.notas;
+  const fila = (k, label, extra, disponible) => `
+    <label style="display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid ${o[k] ? "#2563eb" : "#d1d5db"};background:${o[k] ? "#eff6ff" : "#fff"};border-radius:7px;margin-bottom:8px;cursor:${disponible ? "pointer" : "not-allowed"};opacity:${disponible ? 1 : .55}">
+      <input type="checkbox" ${o[k] ? "checked" : ""} ${disponible ? "" : "disabled"} onchange="togglePDFOpt('${k}')"
+        style="width:17px;height:17px;accent-color:#2563eb;cursor:${disponible ? "pointer" : "not-allowed"}">
+      <span style="flex:1">
+        <span style="font-size:0.85rem;font-weight:600;color:#111827">${label}</span>
+        ${extra ? `<span style="display:block;font-size:0.7rem;color:#6b7280;margin-top:1px">${extra}</span>` : ""}
+      </span>
+    </label>`;
+
+  return `<div class="modal-bg" onclick="if(event.target===this)cerrarModalPDF()">
+    <div class="modal-box" style="max-width:430px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">📄 Exportar PDF — ${MESES[state.mes]} ${state.anio}</div>
+        <button onclick="cerrarModalPDF()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+      </div>
+      <div style="font-size:0.73rem;color:#6b7280;margin-bottom:12px">Elegí qué secciones incluir en el informe.</div>
+      ${fila("planilla", "Planilla de guardias", "Calendario mensual completo", true)}
+      ${fila("horas", "Resumen de horas por médico", hayHoras ? "Guardias, horas totales y promedio" : "Sin guardias cargadas este mes", hayHoras)}
+      ${fila("notas", "Notas del mes", hayNotas ? "Texto del panel 📝 Notas del mes" : "No hay notas escritas este mes", hayNotas)}
+      ${nada ? `<div style="font-size:0.72rem;color:#b91c1c;font-weight:600;margin-bottom:10px">Elegí al menos una sección para poder exportar.</div>` : ""}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px">
+        <button class="btn btn-primary" ${nada ? "disabled" : ""} onclick="confirmarExportarPDF()"
+          style="${nada ? "opacity:.45;cursor:not-allowed" : ""}">📄 Generar PDF</button>
+        <button class="btn btn-secondary" onclick="cerrarModalPDF()">Cancelar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function exportarPDF(opciones) {
+  const opt = opciones || { planilla: true, horas: true, notas: true };
   const totalD = new Date(state.anio, state.mes+1, 0).getDate();
   const primerD = (new Date(state.anio, state.mes, 1).getDay() + 6) % 7; // base-lunes
   const notas = cargarNotasMes();
@@ -2130,7 +2189,7 @@ function exportarPDF() {
   const filas = [];
   for(let i=0; i<todas.length; i+=7) filas.push(`<tr>${todas.slice(i,i+7).join("")}</tr>`);
 
-  const notasHTML = notas.trim()
+  const notasHTML = (opt.notas && notas.trim())
     ? `<div class="notas-wrap">
          <div class="notas-titulo">Notas</div>
          <div class="notas-cuerpo">${escHTML(notas)}</div>
@@ -2139,7 +2198,7 @@ function exportarPDF() {
 
   // MEJORA 9: resumen de horas por médico en el PDF
   const rhPDF = resumenHoras();
-  const horasPDF = rhPDF.length
+  const horasPDF = (opt.horas && rhPDF.length)
     ? `<div style="margin-top:14px">
          <div style="font-size:11pt;font-weight:700;color:#111;margin-bottom:6px">Resumen de horas por médico</div>
          <table style="width:auto;min-width:60%;border-collapse:collapse;font-size:9pt">
@@ -2183,10 +2242,10 @@ ${(function(){
   </div>`;
 })()}
 <h1 class="titulo">${MESES[state.mes].toUpperCase()} ${state.anio}</h1>
-<table>
+${opt.planilla ? `<table>
   <thead><tr>${["L","M","M","J","V","S","D"].map(d=>`<th>${d}</th>`).join("")}</tr></thead>
   <tbody>${filas.join("\n")}</tbody>
-</table>
+</table>` : ""}
 ${horasPDF}
 ${notasHTML}
 </body></html>`;
