@@ -834,11 +834,18 @@ function renderAsigCelda(a, fecha) {
   }
 }
 
+// Fecha de hoy en formato AAAA-MM-DD según la zona horaria del navegador.
+// OJO: no usar toISOString(), que convierte a UTC — al oeste de Greenwich devuelve
+// el día siguiente durante las últimas horas de cada jornada (en Uruguay, desde las 21:00).
+function hoyISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 // ─── RENDER CELDA DÍA ────────────────────────────────────────
 function renderCeldaDia(fecha) {
   const data = diaData(fecha);
   const dia = Number(fecha.split("-")[2]);
-  const hoy = new Date().toISOString().split("T")[0];
+  const hoy = hoyISO();
   const esHoy = fecha === hoy;
   const [_y,_m,_d] = fecha.split("-").map(Number);
   const esFinde = [0,6].includes(new Date(_y, _m-1, _d).getDay());
@@ -2549,7 +2556,7 @@ function semanaDeFecha(fecha) {
 }
 function anclaSemana() {
   if (state.semanaAncla) return state.semanaAncla;
-  const hoy = new Date().toISOString().split("T")[0];
+  const hoy = hoyISO();
   const primero = `${state.anio}-${String(state.mes + 1).padStart(2, "0")}-01`;
   const enMes = hoy.startsWith(`${state.anio}-${String(state.mes + 1).padStart(2, "0")}`);
   state.semanaAncla = enMes ? hoy : primero;
