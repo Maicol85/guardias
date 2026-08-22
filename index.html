@@ -1136,9 +1136,13 @@ function renderModalCopiar() {
     </div>`;
   }).join("");
 
-  return `<div class="modal-bg">
+  return `<div class="modal-bg" onclick="if(event.target===this)cancelarCopiaMes()">
     <div class="modal-box modal-copiar">
-      <div style="font-family:Georgia,serif;font-size:1.1rem;color:#111827;margin-bottom:8px">${MESES[mesNuevo]} ${anioNuevo}</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px">
+        <div style="font-family:Georgia,serif;font-size:1.1rem;color:#111827">${MESES[mesNuevo]} ${anioNuevo}</div>
+        <button onclick="cancelarCopiaMes()" title="Cancelar y quedarse en ${MESES[mesOrigen]}"
+          style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280;line-height:1">✕</button>
+      </div>
       <div style="font-size:0.83rem;color:#6b7280;margin-bottom:22px;line-height:1.6">
         Este mes aún no tiene guardias cargadas.<br>
         ¿Querés usar la disposición de <strong style="color:#111827">${MESES[mesOrigen]} ${anioOrigen}</strong> como base?
@@ -1510,6 +1514,20 @@ function irAMes(anioNuevo, mesNuevo) {
     state.modalCopiar = { anioNuevo, mesNuevo, anioOrigen:state.anio, mesOrigen:state.mes };
     render();
   }
+}
+
+// Cerrar el modal de cambio de mes sin elegir nada: se queda en el mes que ya estaba en pantalla.
+// Ojo: irAMes() NO cambia state.anio/state.mes cuando abre este modal, así que el calendario
+// de fondo sigue siendo el de origen y no hay navegación que revertir.
+// El caso delicado es venir de "Rehacer mes", que ya borró el mes de localStorage antes de
+// preguntar: ahí se vuelve a guardar lo que sigue en memoria para no perder las guardias.
+function cancelarCopiaMes() {
+  state.modalCopiar = null;
+  if (state.calendario) {
+    state.historialMeses[`${state.anio}-${state.mes}`] = state.calendario;
+    guardarEstado();
+  }
+  render();
 }
 
 function aplicarCopia(copiar) {
