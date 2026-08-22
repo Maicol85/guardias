@@ -168,9 +168,10 @@ button { font-family: inherit; cursor: pointer; }
 <div id="login" style="position:fixed;inset:0;z-index:500;background:#0f172a;display:flex;align-items:center;justify-content:center;padding:20px;">
   <div style="width:100%;max-width:360px;text-align:center;animation:fade 0.3s ease;">
     <div style="margin-bottom:26px;">
+      <div id="login-logo"></div>
       <div style="font-family:Georgia,serif;font-size:1.9rem;color:#fff;letter-spacing:0.5px;">Guardia<span style="color:#60a5fa;">Sync</span></div>
       <div style="font-size:0.7rem;color:rgba(255,255,255,0.4);letter-spacing:2px;text-transform:uppercase;margin-top:6px;">CeiboMed</div>
-      <div style="font-size:0.9rem;color:rgba(255,255,255,0.65);margin-top:14px;">Guardia-Emergencia</div>
+      <div id="login-servicio" style="margin-top:14px;"></div>
     </div>
     <input id="login-pass" type="password" placeholder="Contraseña"
       onkeydown="if(event.key==='Enter')intentarLogin()"
@@ -393,7 +394,56 @@ function configPorDefecto() {
       id: `t${dl}_${i}`, rol: t.rol, nombre: getRol(t.rol).desc, horario: t.horario, requeridos: t.requeridos,
     }));
   });
-  return { servicio: "Emergencia — Hospital Artigas", coordinador: "", turnos };
+  return { institucion: "", servicio: "Emergencia — Hospital Artigas", coordinador: "", turnos };
+}
+
+// ─── LOGO INSTITUCIONAL (localStorage "guardias_logo") ───────
+// Se guarda aparte de guardias_config: es un base64 grande y no conviene mezclarlo
+// con el JSON de configuración (que se lee y reescribe en cada edición de turno).
+const LOGO_KEY = "guardias_logo";
+function cargarLogo() { try { return localStorage.getItem(LOGO_KEY) || ""; } catch (e) { return ""; } }
+function borrarLogo() {
+  if (!confirm("¿Eliminar el logo institucional?")) return;
+  try { localStorage.removeItem(LOGO_KEY); } catch (e) {}
+  render();
+}
+// Guarda el data URL, controlando el peso (localStorage ronda los 5 MB en total).
+function finLogo(dataUrl, input) {
+  if (input) input.value = "";
+  if (dataUrl.length > 1200000) {
+    alert("La imagen quedó muy pesada aun después de reducirla. Probá con un logo más simple o en PNG.");
+    return;
+  }
+  try { localStorage.setItem(LOGO_KEY, dataUrl); }
+  catch (e) { alert("No se pudo guardar el logo: no hay espacio de almacenamiento disponible."); return; }
+  render();
+}
+function subirLogo(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  if (!/^image\//.test(file.type)) { alert("Elegí un archivo de imagen (PNG, JPG o SVG)."); ev.target.value = ""; return; }
+  const input = ev.target;
+  const reader = new FileReader();
+  reader.onerror = () => { alert("No se pudo leer el archivo."); input.value = ""; };
+  reader.onload = () => {
+    // SVG: se guarda tal cual (es texto y pesa poco). Rasterizarlo perdería la calidad vectorial.
+    if (/svg/i.test(file.type)) { finLogo(String(reader.result), input); return; }
+    // PNG/JPG: se reduce a 400px de alto antes de guardar, para no llenar el localStorage
+    // con la foto original (una imagen de cámara en base64 lo desborda sola).
+    const img = new Image();
+    img.onerror = () => { alert("No se pudo leer la imagen."); input.value = ""; };
+    img.onload = () => {
+      const maxAlto = 400;
+      const esc = Math.min(1, maxAlto / (img.height || maxAlto));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(img.width * esc));
+      c.height = Math.max(1, Math.round(img.height * esc));
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      finLogo(c.toDataURL("image/png"), input);   // PNG conserva la transparencia
+    };
+    img.src = String(reader.result);
+  };
+  reader.readAsDataURL(file);
 }
 function cargarConfig() {
   try {
@@ -878,6 +928,11 @@ function renderConfig() {
       <div style="font-size:0.72rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">Datos del servicio</div>
       <div class="form-grid-2">
         <div>
+          <div class="form-label">Institución</div>
+          <input class="form-input" value="${escAttr(cfg.institucion || "")}" placeholder="Ej: Hospital de Artigas"
+            oninput="cfgSetCampo('institucion',this.value)" onchange="render()">
+        </div>
+        <div>
           <div class="form-label">Nombre del servicio</div>
           <input class="form-input" value="${escAttr(cfg.servicio || "")}" placeholder="Ej: Emergencia — Hospital Artigas"
             oninput="cfgSetCampo('servicio',this.value)" onchange="render()">
@@ -888,7 +943,31 @@ function renderConfig() {
             oninput="cfgSetCampo('coordinador',this.value)" onchange="render()">
         </div>
       </div>
-      <div style="font-size:0.68rem;color:#6b7280;margin-top:8px">Estos datos aparecen en el encabezado de la app y en el PDF exportado.</div>
+      <div style="font-size:0.68rem;color:#6b7280;margin-top:8px">Estos datos aparecen en la pantalla de ingreso, en el encabezado de la app y en el PDF exportado.</div>
+
+      <div style="border-top:1px solid #e5e7eb;margin-top:14px;padding-top:12px">
+        <div class="form-label" style="margin-bottom:8px">Logo institucional</div>
+        ${(function(){
+          const logo = cargarLogo();
+          if (logo) {
+            return `<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+              <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;display:flex;align-items:center;justify-content:center">
+                <img src="${escAttr(logo)}" alt="Logo institucional" style="max-height:72px;max-width:200px;display:block">
+              </div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <button class="btn btn-secondary btn-sm" onclick="document.getElementById('logo-input').click()">🖼 Cambiar logo</button>
+                <button class="btn btn-secondary btn-sm" style="color:#b91c1c;border-color:#fecaca" onclick="borrarLogo()">🗑 Eliminar logo</button>
+              </div>
+            </div>`;
+          }
+          return `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <button class="btn btn-secondary btn-sm" onclick="document.getElementById('logo-input').click()">🖼 Subir logo</button>
+            <span style="font-size:0.7rem;color:#6b7280">PNG, JPG o SVG. Las imágenes grandes se reducen automáticamente.</span>
+          </div>`;
+        })()}
+        <input type="file" id="logo-input" accept="image/png,image/jpeg,image/svg+xml,image/*" style="display:none" onchange="subirLogo(event)">
+        <div style="font-size:0.68rem;color:#6b7280;margin-top:8px">Se muestra en la pantalla de ingreso, en el encabezado y en el PDF. Si no cargás ninguno, todo se ve como hasta ahora.</div>
+      </div>
     </div>
 
     <div class="section-title">Plantilla de cobertura semanal</div>
@@ -1210,6 +1289,7 @@ function render() {
 
       <div class="header">
         <div class="header-logo">
+          ${(function(){ const l = cargarLogo(); return l ? `<img src="${escAttr(l)}" alt="" style="max-height:32px;max-width:110px;display:block;margin-right:10px;flex:0 0 auto">` : ""; })()}
           <span class="header-title">Guardia<span>Sync</span></span>
           <span class="header-sep"></span>
           ${(function(){
@@ -2419,10 +2499,17 @@ function exportarPDF(opciones) {
 </style></head><body>
 ${(function(){
   const c = state.config || {};
-  if (!c.servicio && !c.coordinador) return "";
-  return `<div style="text-align:center;margin-bottom:2px">
+  const logo = cargarLogo();
+  if (!c.institucion && !c.servicio && !c.coordinador && !logo) return "";
+  const textos = `<div style="text-align:${logo ? "left" : "center"}">
+    ${c.institucion ? `<div style="font-size:10pt;font-weight:700;color:#374151">${escHTML(c.institucion)}</div>` : ""}
     ${c.servicio ? `<div style="font-size:12pt;font-weight:700;color:#111">${escHTML(c.servicio)}</div>` : ""}
     ${c.coordinador ? `<div style="font-size:9pt;color:#374151">Coordinador: ${escHTML(c.coordinador)}</div>` : ""}
+  </div>`;
+  if (!logo) return `<div style="margin-bottom:2px">${textos}</div>`;
+  return `<div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-bottom:2px">
+    <img src="${escAttr(logo)}" alt="" style="max-height:42px;max-width:120px;display:block">
+    ${textos}
   </div>`;
 })()}
 <h1 class="titulo">${MESES[state.mes].toUpperCase()} ${state.anio}</h1>
@@ -2532,6 +2619,30 @@ function iniciarApp() {
   render();
 }
 
+// Pinta el logo y los datos del servicio en la pantalla de ingreso.
+// Lee la config directo de localStorage: esto corre ANTES de iniciarApp(), así que
+// state.config todavía no existe.
+function pintarLogin() {
+  const cfg = cargarConfig();
+  const logo = cargarLogo();
+  const cont = document.getElementById("login-logo");
+  if (cont) {
+    cont.innerHTML = logo
+      ? `<img src="${escAttr(logo)}" alt="Logo institucional" style="max-height:120px;max-width:220px;margin:0 auto 18px;display:block">`
+      : "";
+  }
+  const info = document.getElementById("login-servicio");
+  if (info) {
+    const lineas = [];
+    if (cfg.institucion) lineas.push(`<div style="font-size:0.95rem;color:#fff;font-weight:600">${escHTML(cfg.institucion)}</div>`);
+    if (cfg.servicio)    lineas.push(`<div style="font-size:0.85rem;color:rgba(255,255,255,0.7);margin-top:3px">${escHTML(cfg.servicio)}</div>`);
+    if (cfg.coordinador) lineas.push(`<div style="font-size:0.75rem;color:rgba(255,255,255,0.5);margin-top:4px">Coord.: ${escHTML(cfg.coordinador)}</div>`);
+    info.innerHTML = lineas.length
+      ? lineas.join("")
+      : `<div style="font-size:0.9rem;color:rgba(255,255,255,0.65)">Guardia-Emergencia</div>`;
+  }
+}
+
 function intentarLogin() {
   const val = document.getElementById("login-pass").value;
   if(val === "emergencia") {
@@ -2550,6 +2661,7 @@ function intentarLogin() {
     document.getElementById("login").style.display = "none";
     iniciarApp();
   } else {
+    pintarLogin();
     const inp = document.getElementById("login-pass");
     if(inp) inp.focus();
   }
