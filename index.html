@@ -2727,7 +2727,7 @@ function exportarPDF(opciones) {
   for(let i=0; i<todas.length; i+=7) filas.push(`<tr>${todas.slice(i,i+7).join("")}</tr>`);
 
   const notasHTML = (opt.notas && notas.trim())
-    ? `<div class="notas-wrap">
+    ? `<div>
          <div class="notas-titulo">Notas</div>
          <div class="notas-cuerpo">${escHTML(notas)}</div>
        </div>`
@@ -2736,15 +2736,15 @@ function exportarPDF(opciones) {
   // MEJORA 9: resumen de horas por médico en el PDF
   const rhPDF = resumenHoras();
   const horasPDF = (opt.horas && rhPDF.length)
-    ? `<div style="margin-top:14px">
+    ? `<div class="${opt.planilla ? "bloque-pagina" : ""}">
          <div style="font-size:11pt;font-weight:700;color:#111;margin-bottom:6px">Resumen de horas por médico</div>
          <table style="width:auto;min-width:60%;border-collapse:collapse;font-size:9pt">
-           <thead><tr>${["Médico","Guardias","Horas totales","Promedio"].map(h=>`<th style="background:#e5e7eb;border:1px solid #9ca3af;padding:4px 10px;text-align:left">${h}</th>`).join("")}</tr></thead>
+           <thead><tr>${["Médico","Guardias","Horas totales","Promedio"].map(h=>`<th style="height:auto;background:#e5e7eb;border:1px solid #9ca3af;padding:4px 10px;text-align:left">${h}</th>`).join("")}</tr></thead>
            <tbody>${rhPDF.map(x=>`<tr>
-             <td style="border:1px solid #cbd5e1;padding:3px 10px">${escHTML(x.medico.nombre)}</td>
-             <td style="border:1px solid #cbd5e1;padding:3px 10px;text-align:center">${x.guardias}</td>
-             <td style="border:1px solid #cbd5e1;padding:3px 10px;text-align:center;font-weight:700">${x.horas} h</td>
-             <td style="border:1px solid #cbd5e1;padding:3px 10px;text-align:center">${x.promedio.toFixed(1)} h</td>
+             <td style="height:auto;border:1px solid #cbd5e1;padding:3px 10px">${escHTML(x.medico.nombre)}</td>
+             <td style="height:auto;border:1px solid #cbd5e1;padding:3px 10px;text-align:center">${x.guardias}</td>
+             <td style="height:auto;border:1px solid #cbd5e1;padding:3px 10px;text-align:center;font-weight:700">${x.horas} h</td>
+             <td style="height:auto;border:1px solid #cbd5e1;padding:3px 10px;text-align:center">${x.promedio.toFixed(1)} h</td>
            </tr>`).join("")}</tbody>
          </table>
        </div>`
@@ -2754,7 +2754,6 @@ function exportarPDF(opciones) {
   const subtituloSec = escHTML([(state.config || {}).servicio, `${MESES[state.mes]} ${state.anio}`].filter(Boolean).join(" · "));
 
   // ─── Licencias y ausencias del mes ───
-  const hayContenidoPrevio = !!(opt.planilla || horasPDF);
   const ausPDF = (function () {
     if (!opt.ausencias) return "";
     const arr = ausGet().slice().sort((a, b) => a.desde - b.desde);
@@ -2773,7 +2772,7 @@ function exportarPDF(opciones) {
         <td>${escHTML(a.motivo || "—")}</td>
       </tr>`;
     }).join("");
-    return `<div class="${hayContenidoPrevio ? "sec-pagina" : ""}" style="margin-top:16px">
+    return `<div>
       <div class="sec-tit">Licencias y ausencias del mes</div>
       <div class="sec-sub">${subtituloSec}</div>
       <table class="sec">
@@ -2798,7 +2797,7 @@ function exportarPDF(opciones) {
         <td>${escHTML(e.motivo || "—")}</td>
       </tr>`;
     }).join("");
-    return `<div class="${(hayContenidoPrevio || ausPDF) ? "sec-pagina" : ""}" style="margin-top:16px">
+    return `<div>
       <div class="sec-tit">Historial de intercambios y movimientos</div>
       <div class="sec-sub">${subtituloSec}</div>
       <table class="sec">
@@ -2807,6 +2806,13 @@ function exportarPDF(opciones) {
       </table>
     </div>`;
   })();
+
+  // ─── BLOQUE 3: novedades (notas + ausencias + historial) en UNA sola página ───
+  // Se separan entre sí con una línea fina, nunca con salto de página.
+  const partesNov = [notasHTML, ausPDF, histPDF].filter(Boolean);
+  const novedadesPDF = partesNov.length
+    ? `<div class="${(opt.planilla || horasPDF) ? "bloque-pagina" : ""}">${partesNov.join('<div class="nov-sep"></div>')}</div>`
+    : "";
 
   const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
 <title>Guardias ${MESES[state.mes]} ${state.anio}</title>
@@ -2840,7 +2846,8 @@ function exportarPDF(opciones) {
   .pen-sep { border-top:1px solid #e5e7eb; margin:3px 0; }
   td.solo-pendiente { background:#fef2f2; }
   /* Tablas de secciones extra (ausencias / historial) */
-  .sec-pagina { page-break-before: always; break-before: page; }
+  .bloque-pagina { page-break-before: always; break-before: page; }
+  .nov-sep { border-top:1px solid #d1d5db; margin:18px 0; }
   .sec-tit { font-size:11pt; font-weight:700; color:#111; margin:0 0 3px; }
   .sec-sub { font-size:8.5pt; color:#6b7280; margin-bottom:7px; }
   table.sec { width:100%; border-collapse:collapse; font-size:8.5pt; table-layout:auto; }
@@ -2869,9 +2876,7 @@ ${opt.planilla ? `<table>
   <tbody>${filas.join("\n")}</tbody>
 </table>` : ""}
 ${horasPDF}
-${ausPDF}
-${histPDF}
-${notasHTML}
+${novedadesPDF}
 </body></html>`;
 
   // CAMBIO 2: abrir en nueva ventana y disparar el diálogo de impresión/PDF
