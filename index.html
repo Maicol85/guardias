@@ -55,7 +55,13 @@ button { font-family: inherit; cursor: pointer; }
 .notas-panel textarea:focus { border-color: #1d4ed8; }
 
 /* LEYENDA */
-.leyenda { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+.leyenda { margin-bottom: 14px; }
+.leyenda-linea { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.leyenda-toggle { display: flex; align-items: center; gap: 5px; padding: 3px 10px; border: 1px solid #d1d5db; border-radius: 5px; background: #fff; cursor: pointer; font-family: inherit; font-size: 0.68rem; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: .5px; }
+.leyenda-toggle:hover { border-color: #9ca3af; color: #374151; }
+.leyenda-toggle.abierto { background: #eef2ff; border-color: #a5b4fc; color: #3730a3; }
+.leyenda-chevron { font-size: 0.6rem; opacity: .7; }
+.leyenda-detalle { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 7px; padding: 7px 9px; background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 6px; }
 .leyenda-grupo { display: flex; align-items: center; gap: 4px; }
 .leyenda-label { font-size: 0.65rem; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-right: 2px; }
 .leyenda-item { display: flex; align-items: center; gap: 3px; padding: 2px 8px; border-radius: 4px; }
@@ -268,6 +274,7 @@ let state = {
   config: null,           // configuración del servicio (se carga en initPatronDefault)
   modalPDF: null,         // opciones de exportación de PDF elegidas en el modal
   menuToolbar: false,     // menú "≡" de la toolbar desplegado
+  leyendaGrupo: null,     // grupo de la leyenda desplegado (acordeón); null = todos colapsados
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────
@@ -660,19 +667,25 @@ function renderCalendario() {
   // El header empieza en Lunes, entonces: Dom→6, Lun→0, Mar→1 ... Sáb→5
   const primerDia = (new Date(state.anio, state.mes, 1).getDay() + 6) % 7;
 
-  // Leyenda
+  // Leyenda colapsable: una sola línea con los 3 grupos; el detalle se abre en acordeón.
   const grupos = ["Guardia","Apoyo","Especial"];
-  const leyendaHTML = grupos.map(g => {
-    const roles = ROLES_BASE.filter(r => r.grupo === g);
-    return `<div class="leyenda-grupo">
-      <span class="leyenda-label">${g}:</span>
-      ${roles.map(r => `<div class="leyenda-item" style="background:${r.bg};border:1px solid ${r.color}33">
-        <span class="leyenda-dot" style="background:${r.color}"></span>
-        <span style="font-size:0.68rem;font-weight:600;color:${r.color}">${r.id} — ${r.desc}</span>
-      </div>`).join("")}
-      <span class="leyenda-sep"></span>
-    </div>`;
+  const COLOR_GRUPO = { Guardia:"#334155", Apoyo:"#b45309", Especial:"#0e7490" };
+  const cabecerasHTML = grupos.map(g => {
+    const abierto = state.leyendaGrupo === g;
+    return `<button class="leyenda-toggle${abierto ? " abierto" : ""}" onclick="toggleLeyenda('${g}')" title="Ver los turnos de tipo ${g}">
+      <span class="leyenda-dot" style="background:${COLOR_GRUPO[g]}"></span>
+      <span>${g}</span>
+      <span class="leyenda-chevron">${abierto ? "▾" : "▸"}</span>
+    </button>`;
   }).join("");
+  const detalleHTML = state.leyendaGrupo
+    ? `<div class="leyenda-detalle">${ROLES_BASE.filter(r => r.grupo === state.leyendaGrupo).map(r => `
+        <div class="leyenda-item" style="background:${r.bg};border:1px solid ${r.color}33">
+          <span class="leyenda-dot" style="background:${r.color}"></span>
+          <span style="font-size:0.68rem;font-weight:600;color:${r.color}">${r.id} — ${escHTML(r.desc)}</span>
+        </div>`).join("")}</div>`
+    : "";
+  const leyendaHTML = `<div class="leyenda-linea">${cabecerasHTML}</div>${detalleHTML}`;
 
   // Opciones filtro médico
   const opsMedico = medicos.map(m => `<option value="${m.id}">${escHTML(m.sigla)} — ${escHTML(m.nombre)}</option>`).join("");
@@ -1207,7 +1220,7 @@ function render() {
         <div style="display:flex;gap:8px;align-items:center">
           ${sc > 0 ? `<div class="badge-alerta" style="cursor:pointer" title="Ir al primer día sin cubrir" onclick="irPrimerSinCubrir()">⚠️ ${sc} día${sc!==1?"s":""} sin cubrir</div>` : ""}
         ${(function(){ const tp = turnosPendientesMes(); return tp > 0 ? `<div class="badge-alerta" style="background:#b45309" title="Turnos marcados como pendientes de cubrir en el mes">⚠️ ${tp} turno${tp!==1?"s":""} pendiente${tp!==1?"s":""}</div>` : ""; })()}
-          ${(function(){ const p = pendientesMes(); return `<button class="btn btn-secondary btn-sm" onclick="abrirAusencias()" title="Ausencias y solicitudes" style="position:relative">📋 Ausencias${p > 0 ? `<span style="position:absolute;top:-6px;right:-6px;background:#dc2626;color:#fff;border-radius:999px;min-width:16px;height:16px;font-size:0.6rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 3px">${p}</span>` : ""}</button>`; })()}
+          ${(function(){ const p = pendientesMes(); return `<button class="btn btn-secondary btn-sm" onclick="abrirAusencias()" title="Novedades del mes: ausencias, solicitudes e intercambios" style="position:relative">📋 Novedades${p > 0 ? `<span style="position:absolute;top:-6px;right:-6px;background:#dc2626;color:#fff;border-radius:999px;min-width:16px;height:16px;font-size:0.6rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 3px">${p}</span>` : ""}</button>`; })()}
           ${state.jefe
             ? `<button class="btn btn-secondary btn-sm" onclick="cerrarSesionJefe()" title="Volver a modo solo lectura">🔓 Cerrar sesión</button>`
             : `<button class="btn btn-secondary btn-sm" onclick="activarJefe()" title="Acceso de jefe (edición)" style="opacity:.75">🔒</button>`}
@@ -1244,6 +1257,12 @@ function render() {
 // ─── ACCIONES ────────────────────────────────────────────────
 
 function setView(v) { state.view = v; state.menuToolbar = false; render(); }
+
+// Acordeón de la leyenda: clic en el grupo abierto lo cierra.
+function toggleLeyenda(g) {
+  state.leyendaGrupo = (state.leyendaGrupo === g) ? null : g;
+  render();
+}
 
 // ─── MENÚ "≡" DE LA TOOLBAR ──────────────────────────────────
 function toggleMenuToolbar(ev) {
@@ -1817,6 +1836,43 @@ function renderModalHist() {
 }
 
 // ─── PANEL DE AUSENCIAS Y SOLICITUDES ────────────────────────
+// ─── HISTORIAL DE INTERCAMBIOS DEL MES ───────────────────────
+// Recorre el historial (localStorage) de todos los días del mes y arma la lista de
+// intercambios y movimientos. Cada operación deja DOS entradas (una en cada día
+// involucrado), así que se toma solo el lado que contiene el día contrario.
+function eventosIntercambioMes() {
+  const total = new Date(state.anio, state.mes + 1, 0).getDate();
+  const eventos = [];
+  const vistos = new Set();
+  for (let d = 1; d <= total; d++) {
+    const fecha = fechaDeDia(d);
+    histGet(fecha).forEach(h => {
+      const t = String(h.texto || "");
+
+      if (/Intercambio/.test(t)) {
+        const mDia = t.match(/con (?:el )?día (\d{1,2})/);
+        const otro = mDia ? Number(mDia[1]) : null;
+        const idx = t.indexOf(":");
+        const medicos = idx >= 0 ? t.slice(idx + 1).trim() : "Día completo (todas las asignaciones)";
+        // Clave estable para no listar dos veces la misma operación.
+        const par = otro ? [d, otro].sort((a, b) => a - b) : [d];
+        const clave = `I|${par.join("-")}|${medicos}|${Math.round((h.ts || 0) / 1000)}`;
+        if (vistos.has(clave)) return;
+        vistos.add(clave);
+        eventos.push({ dias: par, tipo: "Intercambio", medicos, motivo: h.motivo || "", ts: h.ts || 0, orden: Math.max(...par) });
+
+      } else if (/movido/.test(t)) {
+        // Solo el lado del origen ("movido al día N"); el del destino es su espejo.
+        const mDest = t.match(/movido al día (\d{1,2})/);
+        if (!mDest) return;
+        const nombre = (t.match(/^[^A-Za-zÁÉÍÓÚÑáéíóúñ]*(.+?)\s+movido/) || [, "—"])[1].trim();
+        eventos.push({ dias: [d, Number(mDest[1])], tipo: "Movimiento", medicos: nombre, motivo: h.motivo || "", ts: h.ts || 0, orden: d, direccional: true });
+      }
+    });
+  }
+  return eventos.sort((a, b) => (b.orden - a.orden) || (b.ts - a.ts));   // fecha descendente
+}
+
 function renderModalAusencias() {
   if (!state.ausPanel) return "";
   const f = state.ausForm;
@@ -1856,11 +1912,36 @@ function renderModalAusencias() {
   return `<div class="modal-bg" onclick="if(event.target===this)cerrarAusencias()">
     <div class="modal-box" style="max-width:520px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">📋 Ausencias — ${MESES[state.mes]} ${state.anio}</div>
+        <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">📋 Novedades — ${MESES[state.mes]} ${state.anio}</div>
         <button onclick="cerrarAusencias()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
       </div>
-      <div style="max-height:40vh;overflow:auto">${lista}</div>
+      <div style="max-height:32vh;overflow:auto">${lista}</div>
       ${formHTML}
+
+      <div style="border-top:1px solid #d1d5db;padding-top:12px;margin-top:14px">
+        <div class="form-label" style="text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">📜 Historial de intercambios</div>
+        ${(function(){
+          const evs = eventosIntercambioMes();
+          if (!evs.length) return `<div style="padding:10px;text-align:center;color:#6b7280;font-size:0.8rem">Sin intercambios ni movimientos registrados en ${MESES[state.mes]}.</div>`;
+          const filas = evs.map(e => {
+            const dias = e.direccional ? `${e.dias[0]} → ${e.dias[1]}` : e.dias.join(" ⇄ ");
+            const cuando = e.ts ? (function(){ const dd = new Date(e.ts); return dd.toLocaleDateString("es") + " " + dd.toLocaleTimeString("es", {hour:"2-digit", minute:"2-digit"}); })() : "—";
+            const color = e.tipo === "Intercambio" ? "#1e40af" : "#b45309";
+            return `<div style="display:grid;grid-template-columns:66px 1fr 84px;gap:7px;align-items:start;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:0.74rem">
+              <div style="font-weight:700;color:#111827;white-space:nowrap">Día ${escHTML(dias)}</div>
+              <div>
+                <div style="color:#374151;font-weight:600">${escHTML(e.medicos)}</div>
+                <div style="font-size:0.68rem;color:${color};font-weight:700">${e.tipo}${e.motivo ? `<span style="color:#b45309;font-weight:500"> · motivo: ${escHTML(e.motivo)}</span>` : ""}</div>
+              </div>
+              <div style="font-size:0.66rem;color:#9ca3af;text-align:right">${escHTML(cuando)}</div>
+            </div>`;
+          }).join("");
+          return `<div style="display:grid;grid-template-columns:66px 1fr 84px;gap:7px;font-size:0.63rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;padding-bottom:4px;border-bottom:1px solid #e5e7eb">
+              <span>Fecha</span><span>Médico(s) · tipo · motivo</span><span style="text-align:right">Registrado</span>
+            </div>
+            <div style="max-height:26vh;overflow:auto">${filas}</div>`;
+        })()}
+      </div>
     </div>
   </div>`;
 }
