@@ -137,6 +137,21 @@ button { font-family: inherit; cursor: pointer; }
 .modal-scroll-head { flex: 0 0 auto; }
 .modal-scroll-body { flex: 1 1 auto; min-height: 0; max-height: 80vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .modal-scroll-foot { flex: 0 0 auto; padding-top: 12px; margin-top: 10px; border-top: 1px solid #e5e7eb; }
+/* Tabla de previsualización del reporte RRHH */
+.rr-tabla { width: 100%; border-collapse: collapse; font-size: 0.78rem; min-width: 780px; }
+.rr-tabla th { background: #f1f5f9; border: 1px solid #cbd5e1; padding: 6px 8px; text-align: center;
+  font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: #475569; }
+.rr-tabla th.rr-th-edit { background: #eff6ff; color: #1e40af; }
+.rr-tabla td { border: 1px solid #e2e8f0; padding: 3px 8px; color: #334155; }
+.rr-tabla tbody tr:nth-child(even) td { background: #fafafa; }
+.rr-nom { font-weight: 600; color: #111827; white-space: nowrap; }
+.rr-num { text-align: center; color: #64748b; }
+.rr-edit { padding: 2px 4px !important; }
+.rr-edit input { width: 100%; border: 1px solid #bfdbfe; border-radius: 5px; padding: 3px 6px;
+  font-family: inherit; font-size: 0.78rem; color: #111827; background: #fff; }
+.rr-edit input:focus { outline: none; border-color: #2563eb; background: #eff6ff; }
+.rr-edit input[type=number] { text-align: center; }
+.rr-tabla tfoot td { background: #e2e8f0; font-weight: 700; color: #111827; border: 1px solid #cbd5e1; }
 
 /* MODAL DÍA */
 .modal-dia { max-width: 460px; }
@@ -305,6 +320,7 @@ let state = {
   modalShare: null,       // modal con el link para compartir
   modalDiaVista: null,    // día abierto en solo lectura (sin edición)
   modalResumen: null,     // "dias" | "pendientes": resumen abierto desde los badges
+  reporteRRHH: null,      // previsualización editable del reporte (solo en memoria)
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────
@@ -995,7 +1011,7 @@ function renderCalendario() {
             <button class="menu-item" onclick="accionMenu(aplicarPlantilla)" title="Aplicar la plantilla guardada a este mes">📂 Aplicar plantilla</button>
             <button class="menu-item" onclick="accionMenu(rehacerMesDesdePatron)" title="Borra las guardias guardadas de este mes y lo vuelve a generar con el patrón del mes anterior">♻️ Rehacer mes</button>
             <div class="menu-sep"></div>
-            <button class="menu-item" onclick="accionMenu(exportarReporteRRHH)">📋 Reporte RRHH</button>
+            <button class="menu-item" onclick="accionMenu(abrirReporteRRHH)">📋 Reporte RRHH</button>
             <div class="menu-sep"></div>
             <button class="menu-item" onclick="accionMenu(exportarMesJSON)">📤 Exportar mes</button>
             <button class="menu-item" onclick="menuImportarMes(event)">📥 Importar mes</button>
@@ -1538,6 +1554,7 @@ function render() {
       ${renderModalShare()}
       ${renderModalDiaVista()}
       ${renderModalResumen()}
+      ${renderReporteRRHH()}
     </div>`;
 
   // Restaurar filtro médico
@@ -3045,35 +3062,131 @@ function datosReporteRRHH() {
     else if (a.tipo === "enfermedad") fila.enfermedad += dias;
     else fila.otro += dias;
   });
-  return Object.values(acc).sort((x, y) => y.horas - x.horas || x.medico.nombre.localeCompare(y.medico.nombre));
+  return Object.values(acc)
+    .map(x => ({ ...x, observaciones: observacionAuto(x) }))
+    .sort((x, y) => y.horas - x.horas || x.medico.nombre.localeCompare(y.medico.nombre));
+}
+// Observación sugerida (el jefe puede sobrescribirla en la previsualización).
+function observacionAuto(x) {
+  const o = [];
+  if (x.enfermedad) o.push(`Enfermedad: ${x.enfermedad} día${x.enfermedad !== 1 ? "s" : ""}`);
+  if (x.otro) o.push(`Otros: ${x.otro} día${x.otro !== 1 ? "s" : ""}`);
+  if (!x.diurnas && !x.nocturnas && !x.apoyos) o.push("Sin guardias en el mes");
+  return o.length ? o.join(" · ") : "—";
 }
 
-function exportarReporteRRHH() {
-  const cfg = state.config || {};
-  const logo = cargarLogo();
-  const filas = datosReporteRRHH();
+// ─── PREVISUALIZACIÓN EDITABLE DEL REPORTE RRHH ──────────────
+// Las ediciones viven solo en state.reporteRRHH (memoria): no pasan por guardarEstado()
+// ni por localStorage, así que se pierden al cerrar. Son para esa impresión y nada más.
+function abrirReporteRRHH() {
+  state.reporteRRHH = { filas: datosReporteRRHH() };
+  render();
+}
+function cerrarReporteRRHH() { state.reporteRRHH = null; render(); }
+function rrhhSetHoras(i, v) {
+  const f = state.reporteRRHH && state.reporteRRHH.filas[i];
+  if (!f) return;
+  f.horas = Math.max(0, Number(v) || 0);
+  const el = document.getElementById("rrhh-total-horas");
+  if (el) el.textContent = state.reporteRRHH.filas.reduce((t, x) => t + (Number(x.horas) || 0), 0);
+}
+function rrhhSetObs(i, v) {
+  const f = state.reporteRRHH && state.reporteRRHH.filas[i];
+  if (f) f.observaciones = v;
+}
+function renderReporteRRHH() {
+  if (!state.reporteRRHH) return "";
+  const filas = state.reporteRRHH.filas;
+  const editable = !!state.jefe;
   const tot = filas.reduce((t, x) => ({
     diurnas: t.diurnas + x.diurnas, nocturnas: t.nocturnas + x.nocturnas, apoyos: t.apoyos + x.apoyos,
-    horas: t.horas + x.horas, licencia: t.licencia + x.licencia, solicitud: t.solicitud + x.solicitud,
+    horas: t.horas + (Number(x.horas) || 0), licencia: t.licencia + x.licencia, solicitud: t.solicitud + x.solicitud,
   }), { diurnas: 0, nocturnas: 0, apoyos: 0, horas: 0, licencia: 0, solicitud: 0 });
 
-  const obsDe = x => {
-    const o = [];
-    if (x.enfermedad) o.push(`Enfermedad: ${x.enfermedad} día${x.enfermedad !== 1 ? "s" : ""}`);
-    if (x.otro) o.push(`Otros: ${x.otro} día${x.otro !== 1 ? "s" : ""}`);
-    if (!x.diurnas && !x.nocturnas && !x.apoyos) o.push("Sin guardias en el mes");
-    return o.length ? o.join(" · ") : "—";
-  };
+  const cuerpo = filas.map((x, i) => `<tr>
+    <td class="rr-nom">${escHTML(x.medico.nombre)}</td>
+    <td class="rr-num">${x.diurnas}</td>
+    <td class="rr-num">${x.nocturnas}</td>
+    <td class="rr-num">${x.apoyos}</td>
+    <td class="rr-edit">${editable
+      ? `<input type="number" min="0" step="1" value="${Number(x.horas) || 0}" oninput="rrhhSetHoras(${i},this.value)">`
+      : `<span>${Number(x.horas) || 0}</span>`}</td>
+    <td class="rr-num">${x.licencia}</td>
+    <td class="rr-num">${x.solicitud}</td>
+    <td class="rr-edit">${editable
+      ? `<input type="text" value="${escAttr(x.observaciones || "")}" oninput="rrhhSetObs(${i},this.value)">`
+      : `<span>${escHTML(x.observaciones || "—")}</span>`}</td>
+  </tr>`).join("");
+
+  return `<div class="modal-bg" onclick="if(event.target===this)cerrarReporteRRHH()">
+    <div class="modal-box modal-scroll" style="max-width:940px">
+      <div class="modal-scroll-head">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">📋 Reporte RRHH — ${MESES[state.mes]} ${state.anio}</div>
+          <button onclick="cerrarReporteRRHH()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+        </div>
+        <div style="font-size:0.73rem;color:#6b7280;margin-bottom:12px">
+          ${editable
+            ? "Revisá los datos antes de imprimir. <strong>Horas totales</strong> y <strong>Observaciones</strong> se pueden corregir a mano; el resto se calcula solo. Las correcciones valen únicamente para este PDF, no se guardan."
+            : "Vista de solo lectura."}
+        </div>
+      </div>
+      <div class="modal-scroll-body">
+        <div style="overflow-x:auto">
+          <table class="rr-tabla">
+            <thead><tr>
+              <th style="text-align:left">Médico</th>
+              <th>G. Diurnas</th><th>G. Nocturnas</th><th>Apoyos</th>
+              <th class="rr-th-edit">Horas totales ✎</th>
+              <th>Licencias (días)</th><th>Días pedidos</th>
+              <th class="rr-th-edit" style="text-align:left">Observaciones ✎</th>
+            </tr></thead>
+            <tbody>${cuerpo}</tbody>
+            <tfoot><tr>
+              <td>TOTALES</td>
+              <td class="rr-num">${tot.diurnas}</td>
+              <td class="rr-num">${tot.nocturnas}</td>
+              <td class="rr-num">${tot.apoyos}</td>
+              <td class="rr-num" id="rrhh-total-horas">${tot.horas}</td>
+              <td class="rr-num">${tot.licencia}</td>
+              <td class="rr-num">${tot.solicitud}</td>
+              <td></td>
+            </tr></tfoot>
+          </table>
+        </div>
+      </div>
+      <div class="modal-scroll-foot" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button class="btn btn-primary" onclick="generarPDFReporteRRHH()">📄 Generar PDF</button>
+        <button class="btn btn-secondary" onclick="cerrarReporteRRHH()">Cancelar</button>
+      </div>
+    </div>
+  </div>`;
+}
+function generarPDFReporteRRHH() {
+  const filas = state.reporteRRHH ? state.reporteRRHH.filas : null;
+  state.reporteRRHH = null;
+  render();
+  exportarReporteRRHH(filas);   // se imprime con los valores editados
+}
+
+function exportarReporteRRHH(filasEditadas) {
+  const cfg = state.config || {};
+  const logo = cargarLogo();
+  const filas = (filasEditadas && filasEditadas.length) ? filasEditadas : datosReporteRRHH();
+  const tot = filas.reduce((t, x) => ({
+    diurnas: t.diurnas + x.diurnas, nocturnas: t.nocturnas + x.nocturnas, apoyos: t.apoyos + x.apoyos,
+    horas: t.horas + (Number(x.horas) || 0), licencia: t.licencia + x.licencia, solicitud: t.solicitud + x.solicitud,
+  }), { diurnas: 0, nocturnas: 0, apoyos: 0, horas: 0, licencia: 0, solicitud: 0 });
 
   const cuerpo = filas.map((x, i) => `<tr${i % 2 ? ' class="par"' : ""}>
     <td class="nom">${escHTML(x.medico.nombre)}</td>
     <td class="num">${x.diurnas}</td>
     <td class="num">${x.nocturnas}</td>
     <td class="num">${x.apoyos}</td>
-    <td class="num fuerte">${x.horas}</td>
+    <td class="num fuerte">${Number(x.horas) || 0}</td>
     <td class="num">${x.licencia}</td>
     <td class="num">${x.solicitud}</td>
-    <td class="obs">${escHTML(obsDe(x))}</td>
+    <td class="obs">${escHTML(x.observaciones || observacionAuto(x))}</td>
   </tr>`).join("");
 
   const hoy = new Date();
