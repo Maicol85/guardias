@@ -1301,7 +1301,7 @@ document.addEventListener("click", function (ev) {
 function activarJefe() {
   const c = prompt("Contraseña de jefe:");
   if (c == null) return;
-  if (c === "emergencia") {
+  if (c === "gremeda2026") {
     try { sessionStorage.setItem("guardias_jefe", "1"); } catch(e) {}
     state.jefe = true; render();
   } else { alert("Contraseña incorrecta."); }
@@ -1849,6 +1849,18 @@ function eventosIntercambioMes() {
     histGet(fecha).forEach(h => {
       const t = String(h.texto || "");
 
+      // Formato nuevo del swap de día completo: "🔄 Día 5 ⇄ 6 — nombres ⇄ nombres".
+      const mCompleto = t.match(/Día (\d{1,2}) ⇄ (\d{1,2}) — (.+)$/);
+      if (mCompleto) {
+        const par = [Number(mCompleto[1]), Number(mCompleto[2])].sort((a, b) => a - b);
+        const medicos = mCompleto[3].trim();
+        const clave = `I|${par.join("-")}|${medicos}|${Math.round((h.ts || 0) / 1000)}`;
+        if (vistos.has(clave)) return;
+        vistos.add(clave);
+        eventos.push({ dias: par, tipo: "Intercambio", medicos, motivo: h.motivo || "", ts: h.ts || 0, orden: Math.max(...par) });
+        return;
+      }
+
       if (/Intercambio/.test(t)) {
         const mDia = t.match(/con (?:el )?día (\d{1,2})/);
         const otro = mDia ? Number(mDia[1]) : null;
@@ -1983,10 +1995,23 @@ function swapDiaDestino(destino) {
   state.calendario[origen].asignaciones = state.calendario[destino].asignaciones;
   state.calendario[destino].asignaciones = tmp;
   state.swapDiaOrigen = null;
-  histLog(origen, `🔄 Intercambio con día ${dnum(destino)}`, motivo);
-  histLog(destino, `🔄 Intercambio con día ${dnum(origen)}`, motivo);
+  // Se registra con los nombres de ambos lados (tomados ANTES del swap) para que el
+  // historial del panel Novedades no diga solamente "Día completo".
+  histLog(origen,  `🔄 Día ${dnum(origen)} ⇄ ${dnum(destino)} — ${nombresDeAsigs(tmp)} ⇄ ${nombresDeAsigs(state.calendario[origen].asignaciones)}`, motivo);
+  histLog(destino, `🔄 Día ${dnum(origen)} ⇄ ${dnum(destino)} — ${nombresDeAsigs(tmp)} ⇄ ${nombresDeAsigs(state.calendario[origen].asignaciones)}`, motivo);
   guardarEstado();
   render();
+}
+// Nombres de los médicos de un set de asignaciones, para los mensajes de historial.
+function nombresDeAsigs(asigs) {
+  const arr = asigs || [];
+  if (!arr.length) return "(vacío)";
+  const nombres = [];
+  arr.forEach(a => {
+    const n = esPendiente(a) ? "⚠️ Pendiente" : ((getMedico(a.medicoId) || {}).nombre || "—");
+    if (!nombres.includes(n)) nombres.push(n);
+  });
+  return nombres.length > 5 ? nombres.slice(0, 5).join(", ") + ` +${nombres.length - 5}` : nombres.join(", ");
 }
 
 // ─── INTERCAMBIO INDIVIDUAL DE MÉDICOS ───────────────────────
@@ -2355,19 +2380,19 @@ function exportarPDF(opciones) {
   const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
 <title>Guardias ${MESES[state.mes]} ${state.anio}</title>
 <style>
-  @page { size: A4 landscape; margin: 14mm 12mm; }
+  @page { size: 297mm 210mm; margin: 12mm 10mm; }   /* A4 apaisado, en mm para máxima compatibilidad */
   * { box-sizing:border-box; margin:0; padding:0; }
   body { font-family: Arial, Helvetica, sans-serif; color:#111; background:#fff; }
   h1.titulo { text-align:center; font-size:22pt; font-weight:700; letter-spacing:1px; color:#111; margin-bottom:16px; }
   table { width:100%; border-collapse:collapse; table-layout:fixed; }
   thead th { background:#e5e7eb; color:#374151; font-size:9pt; font-weight:700; padding:6px 0; text-align:center; border:1px solid #9ca3af; }
-  td { border:1px solid #9ca3af; vertical-align:top; padding:5px 6px; height:82px; background:#fff; }
+  td { border:1px solid #9ca3af; vertical-align:top; padding:6px 7px; height:86px; background:#fff; }
   td.vacio { background:#fff; }
   .num { font-size:8pt; font-weight:700; color:#6b7280; margin-bottom:4px; }
-  .p-med { font-size:8pt; font-weight:700; color:#000; line-height:1.35; margin-bottom:2px; }
+  .p-med { font-size:8pt; font-weight:700; color:#000; line-height:1.6; margin-bottom:4px; }
   .p-hora { font-weight:400; color:#374151; font-size:7pt; }
-  .a-med { font-size:7.5pt; font-weight:600; color:#b45309; line-height:1.3; margin-bottom:1px; }
-  .pen-med { font-size:7.5pt; font-weight:700; color:#c0271e; line-height:1.3; margin-bottom:1px; }
+  .a-med { font-size:7.5pt; font-weight:600; color:#b45309; line-height:1.6; margin-bottom:4px; }
+  .pen-med { font-size:7.5pt; font-weight:700; color:#c0271e; line-height:1.6; margin-bottom:4px; }
   .a-hora { font-weight:400; color:#b45309; font-size:6.5pt; }
   .pen-hora { font-weight:400; color:#c0271e; font-size:6.5pt; }
   .notas-wrap { margin-top:18px; }
