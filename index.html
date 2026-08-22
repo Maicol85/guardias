@@ -195,9 +195,9 @@ const DIAS_FULL = ["Domingo","Lunes","Martes","Miércoles","Jueves","Viernes","S
 const ROLES_BASE = [
   { id:"D12",  label:"08–20 hs",    color:"#334155", bg:"#f8fafc", desc:"Diurno 12hs",         grupo:"Guardia"  },
   { id:"N12",  label:"20–08 hs",    color:"#334155", bg:"#f1f5f9", desc:"Nocturno 12hs",        grupo:"Guardia"  },
-  { id:"A6",   label:"Apoyo 6hs",   color:"#b91c1c", bg:"#fef2f2", desc:"Apoyo 6 horas",        grupo:"Apoyo"    },
+  { id:"A6",   label:"Apoyo 6hs",   color:"#b45309", bg:"#fffbeb", desc:"Apoyo 6 horas",        grupo:"Apoyo"    },
   { id:"A4",   label:"Apoyo 4hs",   color:"#b45309", bg:"#fffbeb", desc:"Apoyo 4 horas",        grupo:"Apoyo"    },
-  { id:"A8",   label:"Apoyo 8hs",   color:"#7c3aed", bg:"#f5f3ff", desc:"Apoyo 8 horas",        grupo:"Apoyo"    },
+  { id:"A8",   label:"Apoyo 8hs",   color:"#b45309", bg:"#fffbeb", desc:"Apoyo 8 horas",        grupo:"Apoyo"    },
   { id:"POL",  label:"Policlínica", color:"#0e7490", bg:"#ecfeff", desc:"Policlínica PA",       grupo:"Especial" },
   { id:"INT",  label:"Interno",     color:"#6d28d9", bg:"#f5f3ff", desc:"Interno/Estudiante",   grupo:"Especial" },
   { id:"X",    label:"Personaliz.", color:"#15803d", bg:"#f0fdf4", desc:"Rol libre",            grupo:"Otro"     },
@@ -635,7 +635,7 @@ function renderCeldaDia(fecha) {
       <span class="${numClases}">${dia}</span>
       <div class="cal-flags">
         ${data.notas ? `<span style="font-size:0.55rem;color:#b45309;font-weight:700">📌</span>` : ""}
-        ${(function(){ const aus = ausDeDia(fecha); if (!aus.length) return ""; const tipos = [...new Set(aus.map(a => a.tipo))]; return `<span onclick="abrirAusDetalle('${fecha}',event)" title="${aus.length} ausencia(s) — ver detalle" style="font-size:0.58rem;cursor:pointer">${tipos.map(t => tipoAus(t).emoji).join("")}</span>`; })()}
+        ${(function(){ const aus = ausDeDiaConGuardia(fecha); if (!aus.length) return ""; const tipos = [...new Set(aus.map(a => a.tipo))]; return `<span onclick="abrirAusDetalle('${fecha}',event)" title="${aus.length} ausencia(s) con guardia asignada — ver detalle" style="font-size:0.58rem;cursor:pointer">${tipos.map(t => tipoAus(t).emoji).join("")}</span>`; })()}
         ${sinCubrirDia && !state.filtroMedico ? `<span style="font-size:0.58rem;color:#b91c1c;font-weight:700">!</span>` : ""}
       </div>
     </div>
@@ -1337,6 +1337,13 @@ function segmentosPorMes(fDesde, fHasta) {
 }
 function fechaDeDia(d) { return `${state.anio}-${String(state.mes + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`; }
 function ausDeDia(fecha) { const d = dnum(fecha); return ausGet().filter(a => d >= a.desde && d <= a.hasta); }
+// Ausencias RELEVANTES para la celda del calendario: solo las de médicos que además tienen
+// una asignación ese día. Una licencia de 15 días no debe marcar los 15 días del calendario:
+// solo aquellos en los que esa persona realmente tenía guardia.
+function ausDeDiaConGuardia(fecha) {
+  const asigs = diaData(fecha).asignaciones || [];
+  return ausDeDia(fecha).filter(a => asigs.some(x => Number(x.medicoId) === Number(a.medicoId)));
+}
 // Días de ausencia (licencia/enfermedad/solicitud) sin ningún médico asignado => pendientes de cubrir.
 function pendientesMes() {
   const dias = new Set();
@@ -2157,26 +2164,33 @@ function exportarPDF(opciones) {
     const data = diaData(fecha);
     const dia = Number(fecha.split("-")[2]);
     const asigsOrd = ordenarAsignaciones(data.asignaciones);
-    const principal = asigsOrd.filter(a => a.rol === "D12" || a.rol === "N12");
-    const apoyo = asigsOrd.filter(a => a.rol !== "D12" && a.rol !== "N12");
+    // Los pendientes van aparte: en el PDF el rojo queda reservado para ellos.
+    const pendientes = asigsOrd.filter(a => esPendiente(a));
+    const cubiertas  = asigsOrd.filter(a => !esPendiente(a));
+    const principal = cubiertas.filter(a => a.rol === "D12" || a.rol === "N12");
+    const apoyo = cubiertas.filter(a => a.rol !== "D12" && a.rol !== "N12");
 
     // Médico principal en negro
     const principalHTML = principal.map(a => {
       const m = getMedico(a.medicoId);
-      const rol = getRol(a.rol);
       if(!m) return "";
       return `<div class="p-med">${escHTML(m.nombre)}<span class="p-hora"> · ${escHTML(horarioDe(a))}</span></div>`;
     }).join("");
 
-    // Médicos de apoyo en rojo
+    // Médicos de apoyo en ámbar
     const apoyoHTML = apoyo.map(a => {
       const m = getMedico(a.medicoId);
-      const rol = getRol(a.rol);
       if(!m) return "";
       return `<div class="a-med">${escHTML(m.nombre)}<span class="a-hora"> · ${escHTML(horarioDe(a))}</span></div>`;
     }).join("");
 
-    return `<td><div class="num">${dia}</div>${principalHTML}${apoyoHTML}</td>`;
+    // Turnos sin cubrir en rojo
+    const pendHTML = pendientes.map(a => {
+      const hora = (a.horario && String(a.horario).trim()) ? String(a.horario) : (a.rol !== "PEN" ? getRol(a.rol).label : "");
+      return `<div class="pen-med">⚠️ Pendiente${hora ? `<span class="pen-hora"> · ${escHTML(hora)}</span>` : ""}</div>`;
+    }).join("");
+
+    return `<td><div class="num">${dia}</div>${principalHTML}${apoyoHTML}${pendHTML}</td>`;
   };
 
   const vacias = Array.from({length:primerD}, () => `<td class="vacio"></td>`);
@@ -2227,8 +2241,10 @@ function exportarPDF(opciones) {
   .num { font-size:8pt; font-weight:700; color:#6b7280; margin-bottom:4px; }
   .p-med { font-size:8pt; font-weight:700; color:#000; line-height:1.35; margin-bottom:2px; }
   .p-hora { font-weight:400; color:#374151; font-size:7pt; }
-  .a-med { font-size:7.5pt; font-weight:600; color:#c0271e; line-height:1.3; margin-bottom:1px; }
-  .a-hora { font-weight:400; color:#c0271e; font-size:6.5pt; }
+  .a-med { font-size:7.5pt; font-weight:600; color:#b45309; line-height:1.3; margin-bottom:1px; }
+  .pen-med { font-size:7.5pt; font-weight:700; color:#c0271e; line-height:1.3; margin-bottom:1px; }
+  .a-hora { font-weight:400; color:#b45309; font-size:6.5pt; }
+  .pen-hora { font-weight:400; color:#c0271e; font-size:6.5pt; }
   .notas-wrap { margin-top:18px; }
   .notas-titulo { font-size:12pt; font-weight:700; color:#111; margin-bottom:6px; border-bottom:1px solid #9ca3af; padding-bottom:4px; }
   .notas-cuerpo { font-size:9pt; color:#374151; line-height:1.5; white-space:pre-wrap; }
