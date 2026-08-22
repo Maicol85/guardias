@@ -74,6 +74,8 @@ button { font-family: inherit; cursor: pointer; }
 .menu-item { display: block; width: 100%; text-align: left; background: transparent; border: none; padding: 8px 11px; border-radius: 6px; font-size: 0.8rem; font-weight: 500; color: #374151; cursor: pointer; font-family: inherit; white-space: nowrap; }
 .menu-item:hover { background: #eff6ff; color: #1e40af; }
 .menu-sep { height: 1px; background: #e5e7eb; margin: 4px 6px; }
+.resumen-fila { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-bottom: 1px solid #f1f5f9; cursor: pointer; border-radius: 6px; }
+.resumen-fila:hover { background: #eff6ff; }
 
 /* CALENDARIO GRILLA */
 .cal-wrap { background: #fff; border-radius: 10px; border: 1px solid #d1d5db; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.12); }
@@ -297,6 +299,7 @@ let state = {
   notasCompartidas: "",   // notas del mes que vienen dentro del link compartido
   modalShare: null,       // modal con el link para compartir
   modalDiaVista: null,    // día abierto en solo lectura (sin edición)
+  modalResumen: null,     // "dias" | "pendientes": resumen abierto desde los badges
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────
@@ -1486,8 +1489,8 @@ function render() {
           })()}
         </div>
         <div style="display:flex;gap:8px;align-items:center">
-          ${sc > 0 ? `<div class="badge-alerta" style="cursor:pointer" title="Ir al primer día sin cubrir" onclick="irPrimerSinCubrir()">⚠️ ${sc} día${sc!==1?"s":""} sin cubrir</div>` : ""}
-        ${(function(){ const tp = turnosPendientesMes(); return tp > 0 ? `<div class="badge-alerta" style="background:#b45309" title="Turnos marcados como pendientes de cubrir en el mes">⚠️ ${tp} turno${tp!==1?"s":""} pendiente${tp!==1?"s":""}</div>` : ""; })()}
+          ${sc > 0 ? `<div class="badge-alerta" style="cursor:pointer" title="Ver el detalle de los días sin cubrir" onclick="abrirResumen('dias')">⚠️ ${sc} día${sc!==1?"s":""} sin cubrir</div>` : ""}
+        ${(function(){ const tp = turnosPendientesMes(); return tp > 0 ? `<div class="badge-alerta" style="background:#b45309;cursor:pointer" title="Ver el detalle de los turnos pendientes" onclick="abrirResumen('pendientes')">⚠️ ${tp} turno${tp!==1?"s":""} pendiente${tp!==1?"s":""}</div>` : ""; })()}
           ${(function(){ const p = pendientesMes(); return `<button class="btn btn-secondary btn-sm" onclick="abrirAusencias()" title="Novedades del mes: ausencias, solicitudes e intercambios" style="position:relative">📋 Novedades${p > 0 ? `<span style="position:absolute;top:-6px;right:-6px;background:#dc2626;color:#fff;border-radius:999px;min-width:16px;height:16px;font-size:0.6rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 3px">${p}</span>` : ""}</button>`; })()}
           ${state.compartido
             ? `<span style="font-size:0.68rem;color:rgba(255,255,255,.6);font-weight:600;white-space:nowrap">👁 Solo lectura</span>`
@@ -1520,6 +1523,7 @@ function render() {
       ${renderModalPDF()}
       ${renderModalShare()}
       ${renderModalDiaVista()}
+      ${renderModalResumen()}
     </div>`;
 
   // Restaurar filtro médico
@@ -2900,18 +2904,97 @@ ${novedadesPDF}
 }
 
 // ─── IR AL PRIMER DÍA SIN CUBRIR (CAMBIO 5) ──────────────────
+// Lleva el foco a una celda del calendario y la resalta un momento.
+function resaltarDia(fecha) {
+  const el = document.getElementById("cell-" + fecha);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  const prev = el.style.boxShadow;
+  el.style.boxShadow = "inset 0 0 0 3px #b91c1c";
+  setTimeout(() => { el.style.boxShadow = prev; }, 2200);
+}
+// Cierra el modal de resumen y salta al día. Si la vista semanal no muestra ese día,
+// se pasa a vista mensual para poder mostrarlo.
+function irADia(fecha) {
+  state.modalResumen = null;
+  state.view = "calendario";
+  render();
+  if (!document.getElementById("cell-" + fecha)) { state.modoCal = "mes"; render(); }
+  resaltarDia(fecha);
+}
 function irPrimerSinCubrir() {
   if(state.view !== "calendario") { state.view = "calendario"; render(); }
-  const fechas = Object.keys(state.calendario).sort();
-  const primera = fechas.find(f => diaSinCubrir(f));
-  if(!primera) return;
-  const el = document.getElementById("cell-" + primera);
-  if(el) {
-    el.scrollIntoView({behavior:"smooth", block:"center"});
-    const prev = el.style.boxShadow;
-    el.style.boxShadow = "inset 0 0 0 3px #b91c1c";
-    setTimeout(() => { el.style.boxShadow = prev; }, 2200);
+  const primera = Object.keys(state.calendario).sort().find(f => diaSinCubrir(f));
+  if(primera) resaltarDia(primera);
+}
+
+// ─── RESUMEN DE PENDIENTES (desde los badges del header) ─────
+function abrirResumen(tipo) { state.modalResumen = tipo; render(); }
+function cerrarResumen() { state.modalResumen = null; render(); }
+// Etiqueta corta del turno: "Diurno 08–20 hs", "Nocturno 20–08 hs", "Apoyo 4 horas …"
+function etiquetaTurno(a) {
+  const rol = getRol(a.rol);
+  const override = (a.horario && String(a.horario).trim()) ? String(a.horario) : "";
+  if (a.rol === "PEN") return override || "turno sin definir";
+  const base = a.rol === "D12" ? "Diurno" : a.rol === "N12" ? "Nocturno" : rol.desc;
+  const hora = override || rol.label;
+  // El "label" de los apoyos no es un rango horario ("Apoyo 4hs"): repetirlo al lado
+  // del nombre del turno no aporta, así que solo se agrega si es un rango real.
+  return /\d\s*[-–—]\s*\d/.test(hora) ? `${base} ${hora}` : base;
+}
+function nombreDiaLargo(fecha) {
+  const [y, m, d] = fecha.split("-").map(Number);
+  return `${DIAS_FULL[new Date(y, m - 1, d).getDay()]} ${d}`;
+}
+function renderModalResumen() {
+  if (!state.modalResumen) return "";
+  const esDias = state.modalResumen === "dias";
+  const fechas = Object.keys(state.calendario || {}).sort();
+
+  let filas = [];
+  if (esDias) {
+    fechas.filter(f => diaSinCubrir(f)).forEach(f => {
+      const asigs = diaData(f).asignaciones || [];
+      // Qué falta: los turnos de guardia pendientes; si el día está vacío, no hay nada cargado.
+      const faltan = asigs.filter(a => esPendiente(a) && (a.rol === "PEN" || esGuardia(a)));
+      const detalle = faltan.length
+        ? faltan.map(a => escHTML(etiquetaTurno(a))).join(" · ")
+        : `<span style="color:#9ca3af">Sin ninguna asignación cargada</span>`;
+      filas.push({ fecha: f, detalle });
+    });
+  } else {
+    fechas.forEach(f => {
+      (diaData(f).asignaciones || []).filter(esPendiente).forEach(a => {
+        filas.push({ fecha: f, detalle: `⚠ Pendiente · ${escHTML(etiquetaTurno(a))}` });
+      });
+    });
   }
+
+  const listaHTML = filas.length
+    ? filas.map(x => `<div onclick="irADia('${x.fecha}')" class="resumen-fila">
+        <span style="font-size:0.82rem;font-weight:700;color:#111827;min-width:104px">${escHTML(nombreDiaLargo(x.fecha))}</span>
+        <span style="font-size:0.76rem;color:#b91c1c;flex:1">${x.detalle}</span>
+        <span style="font-size:0.72rem;color:#9ca3af">ver ›</span>
+      </div>`).join("")
+    : `<div style="padding:16px;text-align:center;color:#15803d;font-size:0.83rem;font-weight:600">✅ No hay nada pendiente en ${MESES[state.mes]}.</div>`;
+
+  const titulo = esDias
+    ? `⚠️ Días sin cubrir — ${MESES[state.mes]} ${state.anio}`
+    : `⚠️ Turnos pendientes — ${MESES[state.mes]} ${state.anio}`;
+  const bajada = esDias
+    ? "Días en los que falta cubrir al menos una guardia."
+    : "Todas las asignaciones marcadas como pendientes de cubrir.";
+
+  return `<div class="modal-bg" onclick="if(event.target===this)cerrarResumen()">
+    <div class="modal-box" style="max-width:480px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">${titulo}</div>
+        <button onclick="cerrarResumen()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+      </div>
+      <div style="font-size:0.72rem;color:#6b7280;margin-bottom:12px">${bajada}${filas.length ? " Tocá una fila para ir a ese día." : ""}</div>
+      <div style="max-height:56vh;overflow:auto">${listaHTML}</div>
+    </div>
+  </div>`;
 }
 
 // ─── EXPORTAR / IMPORTAR MES JSON (CAMBIO 6) ─────────────────
