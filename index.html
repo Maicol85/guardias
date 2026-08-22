@@ -321,6 +321,8 @@ let state = {
   modalDiaVista: null,    // día abierto en solo lectura (sin edición)
   modalResumen: null,     // "dias" | "pendientes": resumen abierto desde los badges
   reporteRRHH: null,      // previsualización editable del reporte (solo en memoria)
+  modalGist: null,        // modal con el link del mes publicado
+  publicando: false,      // hay un POST/PATCH a GitHub en curso
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────
@@ -601,6 +603,153 @@ function actualizarLinkCompartido() {
     if (ok) mostrarToast(`<div class="toast"><span>🔗 Link actualizado y copiado — listo para pegar en WhatsApp</span></div>`, 4000);
     else mostrarToast(`<div class="toast"><span>No se pudo copiar solo</span><button onclick="abrirModalShare()">Ver link</button></div>`, 6000);
   });
+}
+
+// ─── PUBLICAR EL MES COMO GIST DE GITHUB ─────────────────────
+// El token se guarda en su PROPIA clave, nunca dentro de guardias_config: así no puede
+// colarse en el paquete que viaja en los links compartidos ni en un export del mes.
+// ⚠️ Igual queda en localStorage de una app pública: cualquier XSS puede leerlo, y un
+// token con scope "gist" alcanza TODOS los gists de la cuenta. Conviene que sea
+// fine-grained, solo permiso gist, y con vencimiento.
+const GH_TOKEN_KEY = "guardias_gh_token";
+function cargarGhToken() {
+  if (state.compartido) return "";   // quien abre un link nunca usa ni ve el token
+  try { return localStorage.getItem(GH_TOKEN_KEY) || ""; } catch (e) { return ""; }
+}
+function guardarGhToken(v) {
+  if (state.compartido) return;
+  try {
+    const t = String(v || "").trim();
+    if (t) localStorage.setItem(GH_TOKEN_KEY, t); else localStorage.removeItem(GH_TOKEN_KEY);
+  } catch (e) {}
+}
+function borrarGhToken() {
+  if (!confirm("¿Borrar el token de GitHub guardado en este navegador?")) return;
+  try { localStorage.removeItem(GH_TOKEN_KEY); } catch (e) {}
+  render();
+}
+function gistKeyMes(anio, mes) { return `guardias_gist_${anio}_${mes}`; }
+function gistIdGuardado() {
+  try { return localStorage.getItem(gistKeyMes(state.anio, state.mes)) || ""; } catch (e) { return ""; }
+}
+function nombreArchivoGist() { return `guardiasync_${state.mes + 1}_${state.anio}.json`; }
+
+async function publicarMes() {
+  const token = cargarGhToken();
+  if (!token) { alert("Configurá primero el token de GitHub en ⚙️ Configuración."); return; }
+
+  const cuerpo = {
+    description: `GuardiaSync — ${MESES[state.mes]} ${state.anio}${(state.config || {}).servicio ? " · " + state.config.servicio : ""}`,
+    public: false,   // gist secreto: no se lista, pero cualquiera con el link lo ve
+    files: { [nombreArchivoGist()]: { content: JSON.stringify(paqueteCompartir()) } },
+  };
+  const cabeceras = {
+    "Authorization": "Bearer " + token,
+    "Accept": "application/vnd.github+json",
+    "Content-Type": "application/json",
+  };
+
+  state.publicando = true; render();
+  try {
+    let id = gistIdGuardado();
+    let res = null;
+    if (id) {
+      res = await fetch("https://api.github.com/gists/" + encodeURIComponent(id), { method: "PATCH", headers: cabeceras, body: JSON.stringify(cuerpo) });
+      // El gist pudo haberse borrado a mano: en ese caso se crea uno nuevo.
+      if (res.status === 404) { id = ""; res = null; }
+    }
+    if (!res) {
+      res = await fetch("https://api.github.com/gists", { method: "POST", headers: cabeceras, body: JSON.stringify(cuerpo) });
+    }
+    if (res.status === 401) throw new Error("El token no es válido o venció.");
+    if (res.status === 403) throw new Error("GitHub rechazó el pedido (permisos o límite de uso).");
+    if (!res.ok) throw new Error("GitHub respondió " + res.status + ".");
+
+    const g = await res.json();
+    if (!g || !g.id) throw new Error("La respuesta de GitHub no trajo el id del gist.");
+    try { localStorage.setItem(gistKeyMes(state.anio, state.mes), g.id); } catch (e) {}
+    state.publicando = false;
+    state.modalGist = { link: SHARE_BASE + "?gist=" + g.id, nuevo: !id };
+    render();
+  } catch (e) {
+    state.publicando = false; render();
+    alert("No se pudo publicar: " + (e && e.message ? e.message : e));
+  }
+}
+
+function cerrarModalGist() { state.modalGist = null; render(); }
+function copiarLinkGist() {
+  if (!state.modalGist) return;
+  copiarTexto(state.modalGist.link, ok => {
+    const el = document.getElementById("gist-estado");
+    if (el) {
+      el.textContent = ok ? "✅ Link copiado — pegalo en WhatsApp" : "No se pudo copiar solo: seleccioná el texto y copialo a mano.";
+      el.style.color = ok ? "#15803d" : "#b91c1c";
+    }
+  });
+}
+function renderModalGist() {
+  if (!state.modalGist) return "";
+  const { link, nuevo } = state.modalGist;
+  return `<div class="modal-bg" onclick="if(event.target===this)cerrarModalGist()">
+    <div class="modal-box" style="max-width:520px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">📤 ${nuevo ? "Mes publicado" : "Publicación actualizada"} — ${MESES[state.mes]} ${state.anio}</div>
+        <button onclick="cerrarModalGist()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+      </div>
+      <div style="font-size:0.73rem;color:#6b7280;margin-bottom:12px;line-height:1.5">
+        Compartí este link con tu equipo. Siempre muestra la versión más reciente que publiques:
+        cada vez que vuelvas a publicar este mes, el mismo link se actualiza solo.
+      </div>
+      <textarea readonly onclick="this.select()" style="width:100%;height:58px;font-size:0.7rem;font-family:ui-monospace,Menlo,monospace;padding:8px 10px;border:1px solid #d1d5db;border-radius:7px;color:#374151;resize:none;word-break:break-all">${escHTML(link)}</textarea>
+      <div id="gist-estado" style="font-size:0.72rem;font-weight:600;color:#6b7280;margin:6px 0 10px;min-height:16px"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button class="btn btn-primary" onclick="copiarLinkGist()">📋 Copiar link</button>
+        <button class="btn btn-secondary" onclick="cerrarModalGist()">Cerrar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── ABRIR UN MES PUBLICADO (?gist=id) ───────────────────────
+// La lectura es anónima: quien recibe el link NO necesita token.
+function leerGistDeURL() {
+  const m = String(location.search || "").match(/[?&]gist=([A-Za-z0-9]+)/);
+  return m ? m[1] : null;
+}
+async function cargarDesdeGist(id) {
+  try {
+    const res = await fetch("https://api.github.com/gists/" + encodeURIComponent(id), {
+      headers: { "Accept": "application/vnd.github+json" },   // sin Authorization
+    });
+    if (res.status === 404) throw new Error("La planilla publicada ya no existe o el link es incorrecto.");
+    if (!res.ok) throw new Error("GitHub respondió " + res.status + ".");
+    const g = await res.json();
+    const archivos = Object.values(g.files || {});
+    const f = archivos.find(x => /^guardiasync_.*\.json$/i.test(x.filename || "")) || archivos[0];
+    if (!f) throw new Error("El gist no tiene ningún archivo de planilla.");
+    // Los archivos grandes vienen truncados y hay que bajarlos del raw_url.
+    const texto = (f.truncated && f.raw_url) ? await (await fetch(f.raw_url)).text() : f.content;
+    const pkg = JSON.parse(texto);
+    if (!pkg || !pkg.d || typeof pkg.a !== "number" || typeof pkg.m !== "number") throw new Error("El contenido publicado no tiene el formato esperado.");
+    aplicarPaqueteCompartido(pkg);
+    render();
+  } catch (e) {
+    document.getElementById("app").innerHTML = `<div style="font-family:'Inter',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#eef0f3">
+      <div style="max-width:420px;text-align:center;background:#fff;border-radius:14px;padding:28px;box-shadow:0 4px 24px rgba(0,0,0,.12)">
+        <div style="font-family:Georgia,serif;font-size:1.1rem;color:#111827;margin-bottom:8px">No se pudo abrir la planilla</div>
+        <div style="font-size:0.83rem;color:#6b7280;line-height:1.6">${escHTML(e && e.message ? e.message : String(e))}</div>
+      </div>
+    </div>`;
+  }
+}
+function pantallaCargandoGist() {
+  document.getElementById("app").innerHTML = `<div style="font-family:'Inter',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#eef0f3">
+    <div style="text-align:center;color:#6b7280">
+      <div style="font-family:Georgia,serif;font-size:1.3rem;color:#111827;margin-bottom:6px">GuardiaSync</div>
+      <div style="font-size:0.85rem">Cargando la planilla publicada…</div>
+    </div>
+  </div>`;
 }
 
 // ─── LOGO INSTITUCIONAL (localStorage "guardias_logo") ───────
@@ -1005,6 +1154,7 @@ function renderCalendario() {
           ${state.menuToolbar ? `<div id="menu-toolbar" class="menu-dropdown">
             <button class="menu-item" onclick="accionMenu(abrirModalPDF)">📄 Exportar PDF</button>
             ${state.jefe ? `<button class="menu-item" onclick="accionMenu(abrirModalShare)">🔗 Compartir mes</button>` : ""}
+            ${(state.jefe && cargarGhToken()) ? `<button class="menu-item" onclick="accionMenu(publicarMes)">📤 Publicar mes${state.publicando ? " …" : ""}</button>` : ""}
             ${state.jefe ? `
             <div class="menu-sep"></div>
             <button class="menu-item" onclick="accionMenu(guardarPlantilla)" title="Guardar el patrón de este mes como plantilla">💾 Guardar plantilla</button>
@@ -1184,6 +1334,23 @@ function renderConfig() {
         })()}
         <input type="file" id="logo-input" accept="image/png,image/jpeg,image/svg+xml,image/*" style="display:none" onchange="subirLogo(event)">
         <div style="font-size:0.68rem;color:#6b7280;margin-top:8px">Se muestra en la pantalla de ingreso, en el encabezado y en el PDF. Si no cargás ninguno, todo se ve como hasta ahora.</div>
+      </div>
+
+      <div style="border-top:1px solid #e5e7eb;margin-top:14px;padding-top:12px">
+        <div class="form-label" style="margin-bottom:6px">GitHub Token</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input class="form-input" type="password" autocomplete="off" spellcheck="false" style="flex:1;min-width:220px"
+            placeholder="${cargarGhToken() ? "•••••••• (guardado)" : "ghp_… / github_pat_…"}"
+            oninput="guardarGhToken(this.value)" onchange="render()">
+          ${cargarGhToken() ? `<button class="btn btn-secondary btn-sm" style="color:#b91c1c;border-color:#fecaca" onclick="borrarGhToken()">🗑 Borrar token</button>` : ""}
+        </div>
+        <div style="font-size:0.68rem;color:#6b7280;margin-top:8px;line-height:1.6">
+          Necesario para publicar la planilla. Crear en github.com → Settings → Developer settings → Tokens → permiso: <strong>gist</strong>.
+        </div>
+        <div style="font-size:0.68rem;color:#b45309;margin-top:6px;line-height:1.6;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:7px 10px">
+          ⚠️ El token queda guardado en este navegador. Usá uno <strong>fine-grained</strong>, con permiso solo de gist y con vencimiento:
+          un token con scope <code>gist</code> puede leer y modificar todos los gists de tu cuenta.
+        </div>
       </div>
     </div>
 
@@ -1555,6 +1722,7 @@ function render() {
       ${renderModalDiaVista()}
       ${renderModalResumen()}
       ${renderReporteRRHH()}
+      ${renderModalGist()}
     </div>`;
 
   // Restaurar filtro médico
@@ -3363,6 +3531,18 @@ function intentarLogin() {
 }
 
 (function bootstrap() {
+  // Mes publicado en un gist: se baja el JSON y se abre en solo lectura, sin login.
+  const gistId = leerGistDeURL();
+  if (gistId) {
+    const lg0 = document.getElementById("login");
+    if (lg0) lg0.style.display = "none";
+    state.compartido = true;   // desde ya: bloquea cualquier escritura mientras carga
+    state.jefe = false;
+    pantallaCargandoGist();
+    cargarDesdeGist(gistId);
+    return;
+  }
+
   // Link compartido: entra directo en solo lectura, sin login y sin tocar localStorage.
   const pkgShare = leerShareDeURL();
   if (pkgShare) {
