@@ -159,7 +159,18 @@ button { font-family: inherit; cursor: pointer; }
   .main { padding: 12px 10px; }
   .cal-cell { min-height: 80px; }
   .asig-nombre { font-size: 0.55rem; }
+  .header-coord { display: none; }   /* en móvil el header solo muestra institución y servicio */
 }
+
+/* ─── TOAST DE GUARDADO ─────────────────────────────────────── */
+.toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 600;
+  display: flex; align-items: center; gap: 12px; background: #111827; color: #fff;
+  padding: 10px 16px; border-radius: 9px; box-shadow: 0 8px 24px rgba(0,0,0,.25);
+  font-size: 0.8rem; font-weight: 500; max-width: calc(100vw - 28px); animation: fade .2s ease; }
+.toast button { background: transparent; border: 1px solid rgba(255,255,255,.28); color: #93c5fd;
+  border-radius: 6px; padding: 4px 9px; font-size: 0.74rem; font-weight: 600; cursor: pointer;
+  font-family: inherit; white-space: nowrap; }
+.toast button:hover { background: rgba(255,255,255,.08); }
 </style>
 </head>
 <body>
@@ -276,6 +287,9 @@ let state = {
   modalPDF: null,         // opciones de exportación de PDF elegidas en el modal
   menuToolbar: false,     // menú "≡" de la toolbar desplegado
   leyendaGrupo: null,     // grupo de la leyenda desplegado (acordeón); null = todos colapsados
+  compartido: false,      // true al abrir un link ?share= : solo lectura, sin persistencia
+  notasCompartidas: "",   // notas del mes que vienen dentro del link compartido
+  modalShare: null,       // modal con el link para compartir
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────
@@ -292,10 +306,12 @@ function escHTML(s) {
 }
 function notasMesKey(anio, mes) { return `guardias_notas_${anio}_${mes+1}`; }
 function cargarNotasMes() {
+  if (state.compartido) return state.notasCompartidas || "";
   try { return localStorage.getItem(notasMesKey(state.anio, state.mes)) || ""; }
   catch(e) { return ""; }
 }
 function guardarNotasMes(texto) {
+  if (state.compartido) return;
   try { localStorage.setItem(notasMesKey(state.anio, state.mes), texto); }
   catch(e) {}
 }
@@ -304,12 +320,14 @@ function guardarNotasMes(texto) {
 function calKey(anio, mes) { return `guardias_cal_${anio}_${mes+1}`; }
 
 function guardarEstado() {
+  if (state.compartido) return;   // link compartido: nunca se escribe en el navegador de quien lo abre
   try {
     if (state.calendario) {
       localStorage.setItem(calKey(state.anio, state.mes), JSON.stringify(state.calendario));
     }
     localStorage.setItem("guardias_medicos", JSON.stringify(medicos));
   } catch(e) {}
+  toastGuardado();
 }
 
 function cargarCalMes(anio, mes) {
@@ -397,11 +415,166 @@ function configPorDefecto() {
   return { institucion: "", servicio: "Emergencia — Hospital Artigas", coordinador: "", turnos };
 }
 
+// ─── COMPARTIR MES POR LINK (solo lectura) ───────────────────
+const SHARE_BASE = "https://guardias.ceibomed.com";
+
+// base64 con soporte UTF-8: btoa() solo acepta Latin-1 y los nombres traen ñ/acentos.
+function b64Encode(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = "";
+  bytes.forEach(b => { bin += String.fromCharCode(b); });
+  return btoa(bin);
+}
+function b64Decode(b64) {
+  const bin = atob(b64);
+  return new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+}
+// base64url: sin +, / ni = para que el link no necesite escapes.
+function aB64Url(s) { return s.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+function deB64Url(s) { const t = s.replace(/-/g, "+").replace(/_/g, "/"); return t + "=".repeat((4 - t.length % 4) % 4); }
+
+// El paquete se arma compacto (arrays en vez de objetos, sin uid/id, solo días con guardias
+// y solo los médicos usados) porque todo esto termina dentro de una URL.
+function paqueteCompartir() {
+  const cfg = state.config || {};
+  const dias = {};
+  const usados = new Set();
+  Object.keys(state.calendario || {}).forEach(f => {
+    const asigs = state.calendario[f].asignaciones || [];
+    if (!asigs.length) return;
+    dias[dnum(f)] = asigs.map(a => {
+      usados.add(Number(a.medicoId));
+      const h = (a.horario && String(a.horario).trim()) ? String(a.horario) : "";
+      return h ? [Number(a.medicoId), a.rol, h] : [Number(a.medicoId), a.rol];
+    });
+  });
+  const pkg = {
+    v: 1, a: state.anio, m: state.mes, d: dias,
+    md: medicos.filter(m => usados.has(m.id)).map(m => [m.id, m.nombre, m.sigla, m.color]),
+  };
+  if (cfg.institucion || cfg.servicio || cfg.coordinador) pkg.s = [cfg.institucion || "", cfg.servicio || "", cfg.coordinador || ""];
+  const notas = cargarNotasMes();
+  if (notas && notas.trim()) pkg.n = notas;
+  return pkg;
+}
+function generarLinkCompartir() {
+  return SHARE_BASE + "?share=" + aB64Url(b64Encode(JSON.stringify(paqueteCompartir())));
+}
+function leerShareDeURL() {
+  try {
+    const m = String(location.search || "").match(/[?&]share=([^&#]+)/);
+    if (!m) return null;
+    const pkg = JSON.parse(b64Decode(deB64Url(decodeURIComponent(m[1]))));
+    return (pkg && pkg.d && typeof pkg.a === "number" && typeof pkg.m === "number") ? pkg : null;
+  } catch (e) { return null; }
+}
+// Carga el mes compartido en memoria. NADA de esto toca localStorage (ver guardas
+// en guardarEstado/guardarNotasMes/histLog/ausGetMes/cargarLogo).
+function aplicarPaqueteCompartido(pkg) {
+  state.compartido = true;
+  state.jefe = false;
+  state.anio = pkg.a;
+  state.mes = pkg.m;
+  if (Array.isArray(pkg.md) && pkg.md.length) {
+    medicos = pkg.md.map(x => ({ id: x[0], nombre: x[1], sigla: x[2], color: x[3] }));
+  }
+  const s = pkg.s || [];
+  state.config = { institucion: s[0] || "", servicio: s[1] || "", coordinador: s[2] || "", turnos: {} };
+  state.notasCompartidas = pkg.n || "";
+  const cal = generarMesVacio(pkg.a, pkg.m);
+  Object.keys(pkg.d || {}).forEach(dn => {
+    const f = `${pkg.a}-${String(pkg.m + 1).padStart(2, "0")}-${String(dn).padStart(2, "0")}`;
+    if (!cal[f]) return;
+    cal[f].asignaciones = (pkg.d[dn] || []).map((x, i) => {
+      const o = { medicoId: x[0], rol: x[1], id: i };
+      if (x[2]) o.horario = x[2];
+      return o;
+    });
+  });
+  state.calendario = cal;
+  state.historialMeses[`${pkg.a}-${pkg.m}`] = cal;
+}
+
+// Copiar al portapapeles con fallback (navigator.clipboard exige contexto seguro).
+function copiarTexto(txt, cb) {
+  const fallback = () => {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = txt; ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch (e) { return false; }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(() => cb(true)).catch(() => cb(fallback()));
+  } else { cb(fallback()); }
+}
+
+function abrirModalShare() { state.modalShare = { link: generarLinkCompartir() }; render(); }
+function cerrarModalShare() { state.modalShare = null; render(); }
+function copiarLinkShare() {
+  if (!state.modalShare) return;
+  copiarTexto(state.modalShare.link, ok => {
+    const el = document.getElementById("share-estado");
+    if (el) {
+      el.textContent = ok ? "✅ Link copiado — pegalo en WhatsApp" : "No se pudo copiar solo: seleccioná el texto y copialo a mano.";
+      el.style.color = ok ? "#15803d" : "#b91c1c";
+    }
+  });
+}
+function renderModalShare() {
+  if (!state.modalShare) return "";
+  const link = state.modalShare.link;
+  const largo = link.length;
+  return `<div class="modal-bg" onclick="if(event.target===this)cerrarModalShare()">
+    <div class="modal-box" style="max-width:520px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">🔗 Compartir ${MESES[state.mes]} ${state.anio}</div>
+        <button onclick="cerrarModalShare()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+      </div>
+      <div style="font-size:0.73rem;color:#6b7280;margin-bottom:12px;line-height:1.5">
+        Quien abra este link ve la planilla de este mes en <strong>solo lectura</strong>, sin contraseña y sin poder editar.
+        Los datos viajan dentro del link: si después cambiás algo, hay que compartir un link nuevo.
+      </div>
+      <textarea readonly onclick="this.select()" style="width:100%;height:76px;font-size:0.68rem;font-family:ui-monospace,Menlo,monospace;padding:8px 10px;border:1px solid #d1d5db;border-radius:7px;color:#374151;resize:none;word-break:break-all">${escHTML(link)}</textarea>
+      <div id="share-estado" style="font-size:0.72rem;font-weight:600;color:#6b7280;margin:6px 0 10px;min-height:16px">${largo > 8000 ? "⚠️ El link quedó largo (" + largo + " caracteres); algunas apps podrían recortarlo." : ""}</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button class="btn btn-primary" onclick="copiarLinkShare()">📋 Copiar link</button>
+        <button class="btn btn-secondary" onclick="cerrarModalShare()">Cerrar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ─── TOAST DE GUARDADO ───────────────────────────────────────
+let toastTimer = null;
+// El toast vive fuera de #app: render() reemplaza el HTML de la app y lo borraría.
+function mostrarToast(html, ms) {
+  let host = document.getElementById("toast-host");
+  if (!host) { host = document.createElement("div"); host.id = "toast-host"; document.body.appendChild(host); }
+  host.innerHTML = html;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { const h = document.getElementById("toast-host"); if (h) h.innerHTML = ""; }, ms || 5000);
+}
+function toastGuardado() {
+  if (!state.jefe || state.compartido) return;
+  mostrarToast(`<div class="toast"><span>✅ Cambio guardado</span><button onclick="actualizarLinkCompartido()">🔗 Actualizar link</button></div>`);
+}
+function actualizarLinkCompartido() {
+  const link = generarLinkCompartir();
+  copiarTexto(link, ok => {
+    if (ok) mostrarToast(`<div class="toast"><span>🔗 Link actualizado y copiado — listo para pegar en WhatsApp</span></div>`, 4000);
+    else mostrarToast(`<div class="toast"><span>No se pudo copiar solo</span><button onclick="abrirModalShare()">Ver link</button></div>`, 6000);
+  });
+}
+
 // ─── LOGO INSTITUCIONAL (localStorage "guardias_logo") ───────
 // Se guarda aparte de guardias_config: es un base64 grande y no conviene mezclarlo
 // con el JSON de configuración (que se lee y reescribe en cada edición de turno).
 const LOGO_KEY = "guardias_logo";
-function cargarLogo() { try { return localStorage.getItem(LOGO_KEY) || ""; } catch (e) { return ""; } }
+function cargarLogo() { if (state.compartido) return ""; try { return localStorage.getItem(LOGO_KEY) || ""; } catch (e) { return ""; } }
 function borrarLogo() {
   if (!confirm("¿Eliminar el logo institucional?")) return;
   try { localStorage.removeItem(LOGO_KEY); } catch (e) {}
@@ -453,6 +626,7 @@ function cargarConfig() {
   return configPorDefecto();
 }
 function guardarConfig() {
+  if (state.compartido) return;
   try { localStorage.setItem(CONFIG_KEY, JSON.stringify(state.config)); } catch (e) {}
 }
 function turnosDeDow(dow) { return (state.config && state.config.turnos && state.config.turnos[dow]) || []; }
@@ -790,6 +964,7 @@ function renderCalendario() {
             onclick="toggleMenuToolbar(event)" style="font-size:1.05rem;line-height:1;padding:5px 11px">≡</button>
           ${state.menuToolbar ? `<div id="menu-toolbar" class="menu-dropdown">
             <button class="menu-item" onclick="accionMenu(abrirModalPDF)">📄 Exportar PDF</button>
+            ${state.jefe ? `<button class="menu-item" onclick="accionMenu(abrirModalShare)">🔗 Compartir mes</button>` : ""}
             ${state.jefe ? `
             <div class="menu-sep"></div>
             <button class="menu-item" onclick="accionMenu(guardarPlantilla)" title="Guardar el patrón de este mes como plantilla">💾 Guardar plantilla</button>
@@ -1297,7 +1472,7 @@ function render() {
             if (!c.servicio && !c.coordinador) return `<span class="header-suite">CeiboMed</span>`;
             return `<span class="header-suite" style="display:flex;flex-direction:column;line-height:1.25;text-align:left">
               <span>${escHTML(c.servicio || "CeiboMed")}</span>
-              ${c.coordinador ? `<span style="font-size:0.62rem;opacity:.75;text-transform:none;letter-spacing:0">Coord.: ${escHTML(c.coordinador)}</span>` : ""}
+              ${c.coordinador ? `<span class="header-coord" style="font-size:0.62rem;opacity:.75;text-transform:none;letter-spacing:0">Coord.: ${escHTML(c.coordinador)}</span>` : ""}
             </span>`;
           })()}
         </div>
@@ -1305,9 +1480,11 @@ function render() {
           ${sc > 0 ? `<div class="badge-alerta" style="cursor:pointer" title="Ir al primer día sin cubrir" onclick="irPrimerSinCubrir()">⚠️ ${sc} día${sc!==1?"s":""} sin cubrir</div>` : ""}
         ${(function(){ const tp = turnosPendientesMes(); return tp > 0 ? `<div class="badge-alerta" style="background:#b45309" title="Turnos marcados como pendientes de cubrir en el mes">⚠️ ${tp} turno${tp!==1?"s":""} pendiente${tp!==1?"s":""}</div>` : ""; })()}
           ${(function(){ const p = pendientesMes(); return `<button class="btn btn-secondary btn-sm" onclick="abrirAusencias()" title="Novedades del mes: ausencias, solicitudes e intercambios" style="position:relative">📋 Novedades${p > 0 ? `<span style="position:absolute;top:-6px;right:-6px;background:#dc2626;color:#fff;border-radius:999px;min-width:16px;height:16px;font-size:0.6rem;font-weight:700;display:inline-flex;align-items:center;justify-content:center;padding:0 3px">${p}</span>` : ""}</button>`; })()}
-          ${state.jefe
-            ? `<button class="btn btn-secondary btn-sm" onclick="cerrarSesionJefe()" title="Volver a modo solo lectura">🔓 Cerrar sesión</button>`
-            : `<button class="btn btn-secondary btn-sm" onclick="activarJefe()" title="Acceso de jefe (edición)" style="opacity:.75">🔒</button>`}
+          ${state.compartido
+            ? `<span style="font-size:0.68rem;color:rgba(255,255,255,.6);font-weight:600;white-space:nowrap">👁 Solo lectura</span>`
+            : state.jefe
+              ? `<button class="btn btn-secondary btn-sm" onclick="cerrarSesionJefe()" title="Volver a modo solo lectura">🔓 Cerrar sesión</button>`
+              : `<button class="btn btn-secondary btn-sm" onclick="activarJefe()" title="Acceso de jefe (edición)" style="opacity:.75">🔒</button>`}
         </div>
       </div>
 
@@ -1332,6 +1509,7 @@ function render() {
       ${renderModalAusDetalle()}
       ${renderModalSwapMedico()}
       ${renderModalPDF()}
+      ${renderModalShare()}
     </div>`;
 
   // Restaurar filtro médico
@@ -1445,6 +1623,7 @@ const TIPOS_AUS = {
 function tipoAus(t) { return TIPOS_AUS[t] || TIPOS_AUS.otro; }
 function ausKey(anio, mes) { return `guardias_ausencias_${anio}_${mes + 1}`; }
 function ausGetMes(anio, mes) {
+  if (state.compartido) return [];   // el link no comparte ausencias
   try { const a = JSON.parse(localStorage.getItem(ausKey(anio, mes))); return Array.isArray(a) ? a : []; }
   catch (e) { return []; }
 }
@@ -1898,6 +2077,7 @@ function histGet(fecha) {
   catch (e) { return []; }
 }
 function histLog(fecha, texto, motivo) {
+  if (state.compartido) return;
   try {
     const arr = histGet(fecha);
     arr.push({ ts: Date.now(), texto: texto, motivo: motivo || "" });
@@ -2655,6 +2835,16 @@ function intentarLogin() {
 }
 
 (function bootstrap() {
+  // Link compartido: entra directo en solo lectura, sin login y sin tocar localStorage.
+  const pkgShare = leerShareDeURL();
+  if (pkgShare) {
+    aplicarPaqueteCompartido(pkgShare);
+    const lg = document.getElementById("login");
+    if (lg) lg.style.display = "none";
+    render();
+    return;
+  }
+
   let auth = false;
   try { auth = sessionStorage.getItem("guardias_auth") === "ok"; } catch(e) {}
   if(auth) {
