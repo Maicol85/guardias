@@ -2686,22 +2686,12 @@ function exportarPDF(opciones) {
 
     // Turnos sin cubrir: franja roja ubicada según el horario que falta.
     // Diurno arriba (antes de los médicos), nocturno abajo (después).
+    // Una sola línea discreta: el horario ya dice qué turno falta.
     const franja = a => {
-      const h = horaInicioDe(a);
-      const noct = (h != null) && (h >= 19 || h < 6);
-      let tipo;
-      if (a.rol === "N12" || noct) tipo = "NOCTURNO";
-      else if (a.rol === "D12" || h != null) tipo = "DIURNO";
-      else if (getRol(a.rol).grupo === "Apoyo") tipo = "APOYO";
-      else tipo = "TURNO";
       const hora = (a.horario && String(a.horario).trim())
         ? String(a.horario)
-        : (a.rol !== "PEN" ? getRol(a.rol).label : "Horario a definir");
-      return `<div class="pen-band">
-        <div class="pen-t1">⚠ ${tipo} SIN CUBRIR</div>
-        <div class="pen-t2">${escHTML(hora)}</div>
-        <div class="pen-t3">Pendiente de cobertura</div>
-      </div>`;
+        : (a.rol !== "PEN" ? getRol(a.rol).label : "horario a definir");
+      return `<div class="pen-band">⚠ Pendiente · ${escHTML(hora)}</div>`;
     };
     const esNocturno = a => {
       const h = horaInicioDe(a);
@@ -2764,6 +2754,7 @@ function exportarPDF(opciones) {
   const subtituloSec = escHTML([(state.config || {}).servicio, `${MESES[state.mes]} ${state.anio}`].filter(Boolean).join(" · "));
 
   // ─── Licencias y ausencias del mes ───
+  const hayContenidoPrevio = !!(opt.planilla || horasPDF);
   const ausPDF = (function () {
     if (!opt.ausencias) return "";
     const arr = ausGet().slice().sort((a, b) => a.desde - b.desde);
@@ -2782,7 +2773,7 @@ function exportarPDF(opciones) {
         <td>${escHTML(a.motivo || "—")}</td>
       </tr>`;
     }).join("");
-    return `<div style="margin-top:16px">
+    return `<div class="${hayContenidoPrevio ? "sec-pagina" : ""}" style="margin-top:16px">
       <div class="sec-tit">Licencias y ausencias del mes</div>
       <div class="sec-sub">${subtituloSec}</div>
       <table class="sec">
@@ -2807,7 +2798,7 @@ function exportarPDF(opciones) {
         <td>${escHTML(e.motivo || "—")}</td>
       </tr>`;
     }).join("");
-    return `<div style="margin-top:16px">
+    return `<div class="${(hayContenidoPrevio || ausPDF) ? "sec-pagina" : ""}" style="margin-top:16px">
       <div class="sec-tit">Historial de intercambios y movimientos</div>
       <div class="sec-sub">${subtituloSec}</div>
       <table class="sec">
@@ -2843,15 +2834,14 @@ function exportarPDF(opciones) {
   .pen-med { font-size:7.5pt; font-weight:700; color:#c0271e; line-height:1.6; margin-bottom:4px; }
   .a-hora { font-weight:400; color:#b45309; font-size:6.5pt; }
   .pen-hora { font-weight:400; color:#c0271e; font-size:6.5pt; }
-  /* Franja de turno sin cubrir */
-  .pen-band { background:#fef2f2; border-left:4px solid #dc2626; padding:3px 6px; margin-bottom:3px; }
-  .pen-t1 { font-size:9pt; font-weight:700; color:#dc2626; line-height:1.4; }
-  .pen-t2 { font-size:8pt; color:#dc2626; line-height:1.4; }
-  .pen-t3 { font-size:8pt; font-style:italic; color:#dc2626; line-height:1.4; }
-  .pen-sep { border-top:1px solid #e5e7eb; margin:5px 0; }
+  /* Franja de turno sin cubrir: una sola línea discreta, bajo los 20px de alto */
+  .pen-band { background:#fef2f2; border-left:3px solid #dc2626; padding:2px 5px; margin-bottom:2px;
+              font-size:7.5pt; font-weight:600; color:#dc2626; line-height:1.25; }
+  .pen-sep { border-top:1px solid #e5e7eb; margin:3px 0; }
   td.solo-pendiente { background:#fef2f2; }
   /* Tablas de secciones extra (ausencias / historial) */
-  .sec-tit { font-size:11pt; font-weight:700; color:#111; margin:16px 0 3px; }
+  .sec-pagina { page-break-before: always; break-before: page; }
+  .sec-tit { font-size:11pt; font-weight:700; color:#111; margin:0 0 3px; }
   .sec-sub { font-size:8.5pt; color:#6b7280; margin-bottom:7px; }
   table.sec { width:100%; border-collapse:collapse; font-size:8.5pt; table-layout:auto; }
   table.sec th { background:#e5e7eb; border:1px solid #9ca3af; padding:4px 8px; text-align:left; font-size:8pt; }
