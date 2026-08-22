@@ -132,6 +132,11 @@ button { font-family: inherit; cursor: pointer; }
 /* MODAL BASE */
 .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 16px; }
 .modal-box { background: #fff; border-radius: 14px; padding: 24px; width: 100%; box-shadow: 0 4px 24px rgba(0,0,0,0.18); max-height: 90vh; overflow-y: auto; }
+/* Modal con cuerpo scrolleable: los botones de acción nunca quedan fuera de pantalla */
+.modal-scroll { display: flex; flex-direction: column; max-height: 88vh; overflow: hidden; }
+.modal-scroll-head { flex: 0 0 auto; }
+.modal-scroll-body { flex: 1 1 auto; min-height: 0; max-height: 80vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.modal-scroll-foot { flex: 0 0 auto; padding-top: 12px; margin-top: 10px; border-top: 1px solid #e5e7eb; }
 
 /* MODAL DÍA */
 .modal-dia { max-width: 460px; }
@@ -982,6 +987,8 @@ function renderCalendario() {
             <button class="menu-item" onclick="accionMenu(guardarPlantilla)" title="Guardar el patrón de este mes como plantilla">💾 Guardar plantilla</button>
             <button class="menu-item" onclick="accionMenu(aplicarPlantilla)" title="Aplicar la plantilla guardada a este mes">📂 Aplicar plantilla</button>
             <button class="menu-item" onclick="accionMenu(rehacerMesDesdePatron)" title="Borra las guardias guardadas de este mes y lo vuelve a generar con el patrón del mes anterior">♻️ Rehacer mes</button>
+            <div class="menu-sep"></div>
+            <button class="menu-item" onclick="accionMenu(exportarReporteRRHH)">📋 Reporte RRHH</button>
             <div class="menu-sep"></div>
             <button class="menu-item" onclick="accionMenu(exportarMesJSON)">📤 Exportar mes</button>
             <button class="menu-item" onclick="menuImportarMes(event)">📥 Importar mes</button>
@@ -2637,19 +2644,23 @@ function renderModalPDF() {
     </label>`;
 
   return `<div class="modal-bg" onclick="if(event.target===this)cerrarModalPDF()">
-    <div class="modal-box" style="max-width:430px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-        <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">📄 Exportar PDF — ${MESES[state.mes]} ${state.anio}</div>
-        <button onclick="cerrarModalPDF()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+    <div class="modal-box modal-scroll" style="max-width:430px">
+      <div class="modal-scroll-head">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">📄 Exportar PDF — ${MESES[state.mes]} ${state.anio}</div>
+          <button onclick="cerrarModalPDF()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+        </div>
+        <div style="font-size:0.73rem;color:#6b7280;margin-bottom:12px">Elegí qué secciones incluir en el informe.</div>
       </div>
-      <div style="font-size:0.73rem;color:#6b7280;margin-bottom:12px">Elegí qué secciones incluir en el informe.</div>
+      <div class="modal-scroll-body">
       ${fila("planilla", "Planilla de guardias", "Calendario mensual completo", true)}
       ${fila("horas", "Resumen de horas por médico", hayHoras ? "Guardias, horas totales y promedio" : "Sin guardias cargadas este mes", hayHoras)}
       ${fila("notas", "Notas del mes", hayNotas ? "Texto del panel 📝 Notas del mes" : "No hay notas escritas este mes", hayNotas)}
       ${fila("ausencias", "Licencias y ausencias del mes", hayAus ? "Médico, tipo, período y motivo" : "Sin ausencias registradas este mes", hayAus)}
       ${fila("historial", "Historial de intercambios y movimientos", hayHist ? "Permutas y traslados de guardia del mes" : "Sin intercambios registrados este mes", hayHist)}
       ${nada ? `<div style="font-size:0.72rem;color:#b91c1c;font-weight:600;margin-bottom:10px">Elegí al menos una sección para poder exportar.</div>` : ""}
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px">
+      </div>
+      <div class="modal-scroll-foot" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
         <button class="btn btn-primary" ${nada ? "disabled" : ""} onclick="confirmarExportarPDF()"
           style="${nada ? "opacity:.45;cursor:not-allowed" : ""}">📄 Generar PDF</button>
         <button class="btn btn-secondary" onclick="cerrarModalPDF()">Cancelar</button>
@@ -2998,6 +3009,142 @@ function renderModalResumen() {
 }
 
 // ─── EXPORTAR / IMPORTAR MES JSON (CAMBIO 6) ─────────────────
+// ─── REPORTE PARA RRHH (PDF vertical) ────────────────────────
+// Una fila por médico del equipo, incluidos los que no tienen guardias en el mes:
+// RRHH necesita ver el cero explícito, no una ausencia de fila.
+function datosReporteRRHH() {
+  const acc = {};
+  medicos.forEach(m => {
+    acc[m.id] = { medico: m, diurnas: 0, nocturnas: 0, apoyos: 0, horas: 0, licencia: 0, solicitud: 0, enfermedad: 0, otro: 0 };
+  });
+  Object.keys(state.calendario || {}).forEach(f => {
+    (state.calendario[f].asignaciones || []).forEach(a => {
+      if (esPendiente(a)) return;              // los turnos sin cubrir no se le imputan a nadie
+      const fila = acc[Number(a.medicoId)];
+      if (!fila) return;
+      if (a.rol === "D12") fila.diurnas++;
+      else if (a.rol === "N12") fila.nocturnas++;
+      else fila.apoyos++;
+      fila.horas += durationHoras(a);
+    });
+  });
+  // Días de ausencia dentro del mes en pantalla (los segmentos ya vienen recortados al mes).
+  ausGet().forEach(a => {
+    const fila = acc[Number(a.medicoId)];
+    if (!fila) return;
+    const dias = Math.max(0, (Number(a.hasta) || 0) - (Number(a.desde) || 0) + 1);
+    if (a.tipo === "licencia") fila.licencia += dias;
+    else if (a.tipo === "solicitud") fila.solicitud += dias;
+    else if (a.tipo === "enfermedad") fila.enfermedad += dias;
+    else fila.otro += dias;
+  });
+  return Object.values(acc).sort((x, y) => y.horas - x.horas || x.medico.nombre.localeCompare(y.medico.nombre));
+}
+
+function exportarReporteRRHH() {
+  const cfg = state.config || {};
+  const logo = cargarLogo();
+  const filas = datosReporteRRHH();
+  const tot = filas.reduce((t, x) => ({
+    diurnas: t.diurnas + x.diurnas, nocturnas: t.nocturnas + x.nocturnas, apoyos: t.apoyos + x.apoyos,
+    horas: t.horas + x.horas, licencia: t.licencia + x.licencia, solicitud: t.solicitud + x.solicitud,
+  }), { diurnas: 0, nocturnas: 0, apoyos: 0, horas: 0, licencia: 0, solicitud: 0 });
+
+  const obsDe = x => {
+    const o = [];
+    if (x.enfermedad) o.push(`Enfermedad: ${x.enfermedad} día${x.enfermedad !== 1 ? "s" : ""}`);
+    if (x.otro) o.push(`Otros: ${x.otro} día${x.otro !== 1 ? "s" : ""}`);
+    if (!x.diurnas && !x.nocturnas && !x.apoyos) o.push("Sin guardias en el mes");
+    return o.length ? o.join(" · ") : "—";
+  };
+
+  const cuerpo = filas.map((x, i) => `<tr${i % 2 ? ' class="par"' : ""}>
+    <td class="nom">${escHTML(x.medico.nombre)}</td>
+    <td class="num">${x.diurnas}</td>
+    <td class="num">${x.nocturnas}</td>
+    <td class="num">${x.apoyos}</td>
+    <td class="num fuerte">${x.horas}</td>
+    <td class="num">${x.licencia}</td>
+    <td class="num">${x.solicitud}</td>
+    <td class="obs">${escHTML(obsDe(x))}</td>
+  </tr>`).join("");
+
+  const hoy = new Date();
+  const emision = hoy.toLocaleDateString("es") + " " + hoy.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
+
+  const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
+<title>Reporte RRHH ${MESES[state.mes]} ${state.anio}</title>
+<style>
+  @page { size: 210mm 297mm; margin: 15mm 12mm; }   /* A4 vertical */
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family: Arial, Helvetica, sans-serif; color:#111; background:#fff;
+         -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .head { position:relative; text-align:center; margin-bottom:18px; }
+  .head img { position:absolute; top:0; right:0; max-height:56px; max-width:150px; display:block; }
+  .serv { font-size:13pt; font-weight:700; text-transform:uppercase; color:#111; letter-spacing:.5px; }
+  .tit { font-size:16pt; font-weight:700; color:#111; margin-top:6px; font-family:Georgia,'Times New Roman',serif; }
+  .coord { font-size:10pt; color:#6b7280; margin-top:3px; }
+  .linea { border-top:1px solid #d1d5db; margin-top:10px; }
+  table { width:100%; border-collapse:collapse; font-size:8.5pt; }
+  th { background:#e5e7eb; border:1px solid #9ca3af; padding:5px 6px; text-align:center; font-size:7.5pt;
+       text-transform:uppercase; letter-spacing:.3px; color:#374151; }
+  td { border:1px solid #cbd5e1; padding:4px 6px; height:auto; }
+  tr.par td { background:#fafafa; }
+  td.nom { font-weight:600; }
+  td.num { text-align:center; }
+  td.fuerte { font-weight:700; }
+  td.obs { font-size:7.5pt; color:#6b7280; }
+  tfoot td { background:#e5e7eb; font-weight:700; border:1px solid #9ca3af; }
+  .pie { margin-top:26px; font-size:9pt; color:#374151; }
+  .firma { margin-top:22px; font-size:10pt; }
+  .meta { margin-top:12px; font-size:8pt; color:#9ca3af; display:flex; justify-content:space-between; }
+</style></head><body>
+  <div class="head">
+    ${logo ? `<img src="${escAttr(logo)}" alt="">` : ""}
+    ${cfg.institucion ? `<div style="font-size:9.5pt;color:#6b7280;font-weight:600">${escHTML(cfg.institucion)}</div>` : ""}
+    ${cfg.servicio ? `<div class="serv">${escHTML(cfg.servicio)}</div>` : ""}
+    <div class="tit">REPORTE DE GUARDIAS — ${MESES[state.mes].toUpperCase()} ${state.anio}</div>
+    <div class="coord">Coordinador: ${escHTML(cfg.coordinador || "—")}</div>
+    <div class="linea"></div>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th style="text-align:left">Médico</th>
+      <th>G. Diurnas</th><th>G. Nocturnas</th><th>Apoyos</th><th>Horas totales</th>
+      <th>Licencias (días)</th><th>Días pedidos</th>
+      <th style="text-align:left">Observaciones</th>
+    </tr></thead>
+    <tbody>${cuerpo}</tbody>
+    <tfoot><tr>
+      <td>TOTALES</td>
+      <td class="num">${tot.diurnas}</td>
+      <td class="num">${tot.nocturnas}</td>
+      <td class="num">${tot.apoyos}</td>
+      <td class="num">${tot.horas}</td>
+      <td class="num">${tot.licencia}</td>
+      <td class="num">${tot.solicitud}</td>
+      <td></td>
+    </tr></tfoot>
+  </table>
+
+  <div class="pie">
+    <div class="firma">Firma y sello del Coordinador: ________________________________</div>
+    <div class="meta">
+      <span>Emitido el ${escHTML(emision)}</span>
+      <span>${escHTML(SHARE_BASE)}</span>
+    </div>
+  </div>
+</body></html>`;
+
+  const win = window.open("", "_blank");
+  if (!win) { alert("El navegador bloqueó la ventana emergente. Habilitá los pop-ups para exportar el reporte."); return; }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  win.onload = () => { win.focus(); win.print(); };
+}
+
 function exportarMesJSON() {
   const data = {
     app: "GuardiaSync",
