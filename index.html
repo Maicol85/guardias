@@ -64,6 +64,10 @@ button { font-family: inherit; cursor: pointer; }
 
 /* FILTRO MÉDICO */
 .filtro-select { padding: 5px 9px; border: 1px solid #d1d5db; border-radius: 5px; font-size: 0.77rem; background: #fff; color: #374151; }
+.menu-dropdown { position: absolute; top: calc(100% + 5px); right: 0; z-index: 300; min-width: 208px; background: #fff; border: 1px solid #d1d5db; border-radius: 8px; box-shadow: 0 8px 22px rgba(15,23,42,.16); padding: 5px; }
+.menu-item { display: block; width: 100%; text-align: left; background: transparent; border: none; padding: 8px 11px; border-radius: 6px; font-size: 0.8rem; font-weight: 500; color: #374151; cursor: pointer; font-family: inherit; white-space: nowrap; }
+.menu-item:hover { background: #eff6ff; color: #1e40af; }
+.menu-sep { height: 1px; background: #e5e7eb; margin: 4px 6px; }
 
 /* CALENDARIO GRILLA */
 .cal-wrap { background: #fff; border-radius: 10px; border: 1px solid #d1d5db; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,0.12); }
@@ -263,6 +267,7 @@ let state = {
   nuevoMedico: { nombre:"", sigla:"", color:"#1d4ed8" },
   config: null,           // configuración del servicio (se carga en initPatronDefault)
   modalPDF: null,         // opciones de exportación de PDF elegidas en el modal
+  menuToolbar: false,     // menú "≡" de la toolbar desplegado
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────
@@ -654,7 +659,6 @@ function renderCalendario() {
   // Convertir a base-lunes: JS getDay() devuelve 0=Dom,1=Lun,...,6=Sáb
   // El header empieza en Lunes, entonces: Dom→6, Lun→0, Mar→1 ... Sáb→5
   const primerDia = (new Date(state.anio, state.mes, 1).getDay() + 6) % 7;
-  const sc = sinCubrir();
 
   // Leyenda
   const grupos = ["Guardia","Apoyo","Especial"];
@@ -713,21 +717,28 @@ function renderCalendario() {
         <button class="btn btn-secondary btn-sm" onclick="toggleVista()">${state.modoCal === "semana" ? "🗓 Vista mensual" : "📅 Vista semanal"}</button>
       </div>
       <div class="toolbar-right">
-        ${sc > 0 ? `<div class="badge-alerta" style="cursor:pointer" title="Ir al primer día sin cubrir" onclick="irPrimerSinCubrir()">⚠️ ${sc} día${sc!==1?"s":""} sin cubrir</div>` : ""}
-        ${(function(){ const tp = turnosPendientesMes(); return tp > 0 ? `<div class="badge-alerta" style="background:#b45309" title="Turnos marcados como pendientes de cubrir en el mes">⚠️ ${tp} turno${tp!==1?"s":""} pendiente${tp!==1?"s":""}</div>` : ""; })()}
         <select class="filtro-select" onchange="state.filtroMedico=this.value;render()">
           <option value="">Todos los médicos</option>
           ${opsMedico}
         </select>
-        <button class="btn btn-secondary btn-sm" onclick="abrirModalPDF()">📄 Exportar PDF</button>
-        ${state.jefe ? `
-        <button class="btn btn-secondary btn-sm" onclick="guardarPlantilla()" title="Guardar el patrón de este mes como plantilla">💾 Guardar plantilla</button>
-        <button class="btn btn-secondary btn-sm" onclick="aplicarPlantilla()" title="Aplicar la plantilla guardada a este mes">📂 Aplicar plantilla</button>
-        <button class="btn btn-secondary btn-sm" onclick="rehacerMesDesdePatron()" title="Borra las guardias guardadas de este mes y lo vuelve a generar con el patrón del mes anterior">♻️ Rehacer mes</button>
-        <button class="btn btn-secondary btn-sm" onclick="exportarMesJSON()">📤 Exportar mes</button>
-        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('import-json-input').click()">📥 Importar mes</button>
-        <input type="file" id="import-json-input" accept="application/json,.json" style="display:none" onchange="importarMesJSON(event)">
-        ` : ""}
+
+        <div style="position:relative">
+          <button id="menu-toolbar-btn" class="btn btn-secondary btn-sm" title="Más acciones"
+            onclick="toggleMenuToolbar(event)" style="font-size:1.05rem;line-height:1;padding:5px 11px">≡</button>
+          ${state.menuToolbar ? `<div id="menu-toolbar" class="menu-dropdown">
+            <button class="menu-item" onclick="accionMenu(abrirModalPDF)">📄 Exportar PDF</button>
+            ${state.jefe ? `
+            <div class="menu-sep"></div>
+            <button class="menu-item" onclick="accionMenu(guardarPlantilla)" title="Guardar el patrón de este mes como plantilla">💾 Guardar plantilla</button>
+            <button class="menu-item" onclick="accionMenu(aplicarPlantilla)" title="Aplicar la plantilla guardada a este mes">📂 Aplicar plantilla</button>
+            <button class="menu-item" onclick="accionMenu(rehacerMesDesdePatron)" title="Borra las guardias guardadas de este mes y lo vuelve a generar con el patrón del mes anterior">♻️ Rehacer mes</button>
+            <div class="menu-sep"></div>
+            <button class="menu-item" onclick="accionMenu(exportarMesJSON)">📤 Exportar mes</button>
+            <button class="menu-item" onclick="menuImportarMes(event)">📥 Importar mes</button>
+            ` : ""}
+          </div>` : ""}
+        </div>
+        ${state.jefe ? `<input type="file" id="import-json-input" accept="application/json,.json" style="display:none" onchange="importarMesJSON(event)">` : ""}
       </div>
     </div>
 
@@ -1232,7 +1243,40 @@ function render() {
 
 // ─── ACCIONES ────────────────────────────────────────────────
 
-function setView(v) { state.view = v; render(); }
+function setView(v) { state.view = v; state.menuToolbar = false; render(); }
+
+// ─── MENÚ "≡" DE LA TOOLBAR ──────────────────────────────────
+function toggleMenuToolbar(ev) {
+  if (ev) ev.stopPropagation();   // que no lo cierre el listener de "clic afuera"
+  state.menuToolbar = !state.menuToolbar;
+  render();
+}
+function cerrarMenuToolbar() { state.menuToolbar = false; render(); }
+// Cierra el menú y después ejecuta la acción elegida.
+function accionMenu(fn) {
+  state.menuToolbar = false;
+  render();
+  if (typeof fn === "function") fn();
+}
+// "Importar mes" es especial: NO se puede re-renderizar antes de abrir el diálogo de archivos,
+// porque eso desconecta el <input type=file> del DOM y su onchange nunca dispararía.
+function menuImportarMes(ev) {
+  if (ev) ev.stopPropagation();
+  state.menuToolbar = false;
+  const menu = document.getElementById("menu-toolbar");
+  if (menu) menu.style.display = "none";   // se oculta sin re-render
+  const inp = document.getElementById("import-json-input");
+  if (inp) inp.click();
+}
+// Clic fuera del menú => cerrarlo. Se registra una sola vez (el render reemplaza el HTML,
+// así que un listener por elemento se perdería en cada render).
+document.addEventListener("click", function (ev) {
+  if (!state.menuToolbar) return;
+  const t = ev.target;
+  if (t && t.closest && (t.closest("#menu-toolbar") || t.closest("#menu-toolbar-btn"))) return;
+  state.menuToolbar = false;
+  render();
+});
 
 // ─── MEJORA 13: MODO SOLO LECTURA / JEFE ─────────────────────
 function activarJefe() {
