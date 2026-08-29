@@ -89,6 +89,10 @@ button { font-family: inherit; cursor: pointer; }
 .cal-cell.finde { background: #fafafa; }
 .cal-cell.hoy { background: #f0f7ff; }
 .cal-cell.sin-cubrir { background: #fff5f5; }
+/* Día cuyo contenido salió de más de un prototipo. El borde interior además del fondo:
+   en la impresión y en pantallas con poco contraste un amarillo claro no se distingue
+   del blanco, y el resaltado es justamente lo que hay que poder encontrar. */
+.cal-cell.proto-conf { background: #fffbeb !important; box-shadow: inset 0 0 0 2px #f59e0b; }
 
 /* NÚMERO DÍA */
 .cal-num-wrap { padding: 5px 7px; display: flex; justify-content: space-between; align-items: flex-start; }
@@ -323,6 +327,9 @@ let state = {
   reporteRRHH: null,      // previsualización editable del reporte (solo en memoria)
   modalGist: null,        // modal con el link del mes publicado
   publicando: false,      // hay un POST/PATCH a GitHub en curso
+  modalProto: null,       // { tab, datos, aviso } — prototipos de guardia
+  protoResumen: null,     // desglose de la última aplicación (banner de revisión)
+  protoConflictos: [],    // fechas resueltas por especificidad, resaltadas en amarillo
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────
@@ -352,15 +359,24 @@ function guardarNotasMes(texto) {
 // ─── PERSISTENCIA GLOBAL (CAMBIO 1) ──────────────────────────
 function calKey(anio, mes) { return `guardias_cal_${anio}_${mes+1}`; }
 
+/* Devuelve true sólo si de verdad se escribió. El catch estaba vacío y el toast vivía
+   AFUERA del try: con el almacenamiento lleno, la app decía "✅ Cambio guardado" sobre un
+   mes que sólo existía en memoria y se perdía al cerrar la pestaña. Aplicar prototipos
+   reescribe hasta 31 días de una, así que es el camino donde más caro sale. */
 function guardarEstado() {
-  if (state.compartido) return;   // link compartido: nunca se escribe en el navegador de quien lo abre
+  if (state.compartido) return true;   // link compartido: nunca se escribe en el navegador de quien lo abre
   try {
     if (state.calendario) {
       localStorage.setItem(calKey(state.anio, state.mes), JSON.stringify(state.calendario));
     }
     localStorage.setItem("guardias_medicos", JSON.stringify(medicos));
-  } catch(e) {}
+  } catch(e) {
+    console.error("[guardarEstado] no se pudo persistir", e);
+    alert("⚠️ No se pudo guardar en este navegador (almacenamiento lleno).\n\nLos cambios están en pantalla pero SE PIERDEN al cerrar la pestaña. Exportá el mes o liberá espacio antes de seguir.");
+    return false;
+  }
   toastGuardado();
+  return true;
 }
 
 function cargarCalMes(anio, mes) {
@@ -1031,6 +1047,9 @@ function renderCeldaDia(fecha) {
   if(esHoy) clases += " hoy";
   else if(esFinde) clases += " finde";
   else if(sinCubrirDia) clases += " sin-cubrir";
+  // El amarillo va DESPUÉS y como clase aparte: un día con conflicto puede además ser
+  // hoy, fin de semana o estar sin cubrir, y sólo una de esas ramas se aplica.
+  if ((state.protoConflictos || []).indexOf(fecha) >= 0) clases += " proto-conf";
 
   let numClases = "cal-num";
   if(esHoy) numClases += " hoy";
@@ -1156,6 +1175,7 @@ function renderCalendario() {
             ${state.jefe ? `<button class="menu-item" onclick="accionMenu(abrirModalShare)">🔗 Compartir mes</button>` : ""}
             ${(state.jefe && cargarGhToken()) ? `<button class="menu-item" onclick="accionMenu(publicarMes)">📤 Publicar mes${state.publicando ? " …" : ""}</button>` : ""}
             ${state.jefe ? `
+            <button class="menu-item" onclick="accionMenu(abrirModalProto)" title="Armar prototipos por día de semana, por semana o del mes completo">📐 Prototipos</button>
             <div class="menu-sep"></div>
             <button class="menu-item" onclick="accionMenu(guardarPlantilla)" title="Guardar el patrón de este mes como plantilla">💾 Guardar plantilla</button>
             <button class="menu-item" onclick="accionMenu(aplicarPlantilla)" title="Aplicar la plantilla guardada a este mes">📂 Aplicar plantilla</button>
@@ -1172,6 +1192,7 @@ function renderCalendario() {
       </div>
     </div>
 
+    ${renderProtoResumen()}
     ${state.copiarDiaOrigen ? `<div style="background:#eff6ff;border:1px solid #2563eb;border-radius:8px;padding:10px 14px;margin-bottom:10px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
         <span style="font-size:0.82rem;color:#1e40af;font-weight:600">📋 Día ${dnum(state.copiarDiaOrigen)} copiado — clic en un día para pegar ahí, o usá los botones:</span>
@@ -1484,6 +1505,8 @@ function renderModalDia() {
               style="width:17px;height:17px;margin-right:2px;cursor:pointer;accent-color:#2563eb;flex:0 0 auto">
             <div class="modal-dia-asig-info">
               <div style="font-size:0.82rem;font-weight:700;color:#b91c1c">⚠️ Pendiente de cubrir${faltaRol ? "" : ` — ${escHTML(rol.desc)} ${escHTML(horarioDe(a))}`}</div>
+              ${a.txt ? `<div style="font-size:0.68rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:2px 6px;margin-top:3px;display:inline-block"
+                title="Texto tal como se escribió en el prototipo">Del prototipo: «${escHTML(a.txt)}»${a.protoMotivo ? ` — ${escHTML(a.protoMotivo)}` : ""}</div>` : ""}
               <div style="display:flex;gap:6px;margin-top:5px;flex-wrap:wrap;align-items:center">
                 <select class="form-select" style="font-size:0.72rem;padding:2px 6px;width:auto" onchange="cubrirPendiente('${fecha}','${uid}',this.value)">
                   <option value="">Cubrir con…</option>${opsCubrir}
@@ -1619,6 +1642,8 @@ function renderModalCopiar() {
         <button class="btn btn-primary" onclick="aplicarCopia(true)">✅ Sí, usar como base</button>
         <button class="btn btn-secondary" onclick="aplicarCopia(false)">📋 Empezar en blanco</button>
       </div>
+      ${(state.jefe && protoTieneAlgo()) ? `<button class="btn btn-secondary" style="width:100%;margin-top:10px" onclick="aplicarCopiaProto()"
+        title="Empezar el mes en blanco y aplicarle los prototipos guardados">📐 Empezar y aplicar prototipos</button>` : ""}
     </div>
   </div>`;
 }
@@ -1723,6 +1748,7 @@ function render() {
       ${renderModalResumen()}
       ${renderReporteRRHH()}
       ${renderModalGist()}
+      ${renderModalProto()}
     </div>`;
 
   // Restaurar filtro médico
@@ -1786,6 +1812,7 @@ function cerrarSesionJefe() {
   state.jefe = false; state.view = "calendario"; state.modalDia = null;
   state.copiarDiaOrigen = null; state.swapDiaOrigen = null;
   state.swapMedicoOrigen = null; state.swapMedicoDestino = null; state.medicoSelModal = new Set();
+  state.modalProto = null; protoLimpiarRevision();   // el banner tiene un botón que abre el modal editable
   render();
 }
 
@@ -1824,6 +1851,435 @@ function aplicarPlantilla() {
   guardarEstado();
   render();
   alert("Plantilla aplicada a " + aplicados + " día(s).");
+}
+
+// ─── PROTOTIPOS DE GUARDIA ───────────────────────────────────
+// Tres capas de plantilla con especificidad creciente:
+//   A (dow)  — un patrón por día de semana. Base, la menos específica.
+//   B (sem)  — ajustes de una semana puntual del mes.
+//   C (mes)  — el mes entero armado a mano. Gana sobre todo.
+// Cada celda guarda el TEXTO tal como lo escribió el jefe, no el resultado de
+// interpretarlo: así al reabrir el modal ve lo que tipeó y no una traducción. La
+// interpretación ocurre recién al aplicar, que es también donde se informa qué no se
+// pudo resolver.
+const PROTO_KEY = "guardias_prototipos";
+const PROTO_SEMANAS = 5;   // filas de las pestañas B y C
+
+function protoVacio() { return { v: 1, dow: {}, sem: {}, mes: {} }; }
+function protoCargar() {
+  try {
+    const raw = localStorage.getItem(PROTO_KEY);
+    if (!raw) return protoVacio();
+    const o = JSON.parse(raw);
+    if (!o || typeof o !== "object") return protoVacio();
+    return { v: 1, dow: o.dow || {}, sem: o.sem || {}, mes: o.mes || {} };
+  } catch (e) { return protoVacio(); }
+}
+function protoGuardar(p) {
+  if (state.compartido) return false;
+  try { localStorage.setItem(PROTO_KEY, JSON.stringify(p)); return true; }
+  catch (e) { alert("No se pudo guardar el prototipo: el almacenamiento del navegador está lleno."); return false; }
+}
+// ¿Hay algo escrito en alguna de las tres capas?
+function protoTieneAlgo(p) {
+  p = p || protoCargar();
+  const hay = o => Object.keys(o || {}).some(k => {
+    const v = o[k];
+    if (typeof v === "string") return v.trim() !== "";
+    return Object.keys(v || {}).some(k2 => String(v[k2] || "").trim() !== "");
+  });
+  return hay(p.dow) || hay(p.sem) || hay(p.mes);
+}
+
+// Normaliza para comparar: sin acentos, sin puntos, minúsculas.
+function protoNorm(s) {
+  return String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[.\-_]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
+}
+/* Resuelve un texto a un médico de la lista. Devuelve {medico} | {ambiguo:[...]} | {no:true}.
+   El orden importa: sigla exacta primero, después nombre exacto, y recién ahí la búsqueda
+   parcial. Sin ese orden, escribir una sigla que además es parte de un apellido daría el
+   médico equivocado sin avisar. */
+function protoResolver(txt) {
+  const t = protoNorm(txt);
+  if (!t) return { no: true };
+  let c = medicos.filter(m => protoNorm(m.sigla) === t);
+  if (c.length === 1) return { medico: c[0] };
+  c = medicos.filter(m => protoNorm(m.nombre) === t);
+  if (c.length === 1) return { medico: c[0] };
+  /* Tanto la coincidencia por palabra suelta como la parcial exigen 3 caracteres. Con menos es adivinar: una "A" suelta
+     —un tipeo a medias, una viñeta que quedó— resolvía a A. Cuña y lo metía en una
+     guardia que no es suya, y eso no se descubre hasta que alguien no aparece. Las
+     coincidencias exactas de arriba sí admiten siglas cortas. */
+  if (t.length >= 3) {
+    c = medicos.filter(m => protoNorm(m.nombre).split(" ").some(w => w === t));
+    if (c.length === 1) return { medico: c[0] };
+    c = medicos.filter(m => protoNorm(m.nombre).indexOf(t) >= 0);
+    if (c.length === 1) return { medico: c[0] };
+    if (c.length > 1) return { ambiguo: c };
+  }
+  return { no: true };
+}
+
+/* Interpreta una celda. Una entrada por línea o separadas por coma / punto y coma.
+   Cada entrada: <médico> [rol] [horario].  Ej: "QUI", "Rodriguez N12", "Cuña D12 08-14hs".
+   Sin rol explícito, el turno sale de la plantilla de cobertura configurada para ese día
+   —el primer nombre toma el primer turno del día, el segundo el segundo— porque eso es lo
+   que el jefe quiere decir cuando escribe tres apellidos en un lunes. Si no hay config o
+   sobran nombres, el resto cae en D12.
+   Lo que no se puede resolver NO se descarta: entra como turno pendiente conservando el
+   texto original, que es un estado que la app ya sabe mostrar. */
+function protoParseCelda(txt, dowLun) {
+  const partes = String(txt || "").split(/[\n,;]+/).map(x => x.trim()).filter(Boolean);
+  // Turnos que la configuración pide para ese día de semana, expandidos por `requeridos`.
+  const cfgT = ((state.config || {}).turnos || {})[dowLun] || [];
+  const esperados = [];
+  cfgT.forEach(t => { for (let i = 0; i < Math.max(1, Number(t.requeridos) || 1); i++) esperados.push(t); });
+  return partes.map((entrada, i) => {
+    let resto = entrada, rol = null, horario = null;
+    /* Se consumen los modificadores del final EN BUCLE, en cualquier orden. Con un paso
+       fijo horario→rol, escribir "E. García 08-14hs A6" dejaba resto="E. García 08-14hs"
+       y el médico salía como «sin coincidencia» — un motivo que además miente, porque el
+       apellido estaba bien escrito y la persona existe. */
+    for (let pasada = 0; pasada < 4; pasada++) {
+      const mh = resto.match(/(\d{1,2}\s*(?::\d{2})?\s*[-–a]\s*\d{1,2}\s*(?::\d{2})?\s*(?:hs|h)?)\s*$/i);
+      if (mh && !horario && resto.slice(0, mh.index).trim()) {
+        horario = mh[1].replace(/\s+/g, ""); resto = resto.slice(0, mh.index).trim(); continue;
+      }
+      const mr = resto.match(/([A-Za-zÁÉÍÓÚÑáéíóúñ0-9]+)\s*$/);
+      if (mr && !rol) {
+        const cand = mr[1].toUpperCase();
+        if (ROLES_BASE.some(r => r.id === cand) && resto.slice(0, mr.index).trim()) {
+          rol = cand; resto = resto.slice(0, mr.index).trim(); continue;
+        }
+      }
+      break;
+    }
+    if (!rol) { const e = esperados[i]; rol = e ? e.rol : "D12"; if (!horario && e && e.horario) horario = e.horario; }
+    /* El horario se guarda SÓLO si difiere del rótulo del rol. La plantilla de cobertura
+       suele traer justamente ese rótulo, y grabarlo como override no cambiaba nada en
+       pantalla pero dejaba un horario fijo pegado a cada turno: al cambiarle el rol
+       después, seguiría mostrando el horario viejo. Además engorda el link compartido. */
+    if (horario && String(horario).trim() === String(getRol(rol).label).trim()) horario = null;
+    const r = protoResolver(resto);
+    if (r.medico) {
+      const o = { medicoId: r.medico.id, rol };
+      if (horario) o.horario = horario;
+      return o;
+    }
+    /* Ambiguo y no encontrado se distinguen en el mensaje pero terminan igual: pendiente.
+       Adivinar entre dos apellidos parecidos pondría a un médico en una guardia que no es
+       suya, y eso no se ve hasta que alguien no aparece. */
+    const o = { medicoId: 0, rol: rol || "D12", txt: entrada };
+    o.protoMotivo = r.ambiguo ? ("ambiguo: " + r.ambiguo.map(m => m.sigla).join(" / ")) : "sin coincidencia";
+    if (horario) o.horario = horario;
+    return o;
+  });
+}
+
+// Semana (0-based) que le toca a un día en la grilla del mes, que arranca en lunes.
+function protoSemanaDe(anio, mes, d) {
+  const primerDia = (new Date(anio, mes, 1).getDay() + 6) % 7;
+  return Math.floor((primerDia + d - 1) / 7);
+}
+function protoTexto(p, capa, semIdx, dowLun) {
+  if (capa === "dow") return String((p.dow || {})[dowLun] || "");
+  const t = (p[capa] || {})[semIdx];
+  return String((t || {})[dowLun] || "");
+}
+
+/* Aplica las tres capas al mes en pantalla. Devuelve el desglose para el resumen; no
+   toca el DOM ni guarda: eso lo decide el llamador. */
+function protoAplicar(p) {
+  p = p || protoCargar();
+  const anio = state.anio, mes = state.mes;
+  const total = new Date(anio, mes + 1, 0).getDate();
+  /* anio/mes quedan grabados en el resumen: el banner y el resaltado ámbar viven en
+     memoria y sobrevivían al cambio de mes, así que "Revisar conflictos" abría una fecha
+     de agosto con el calendario de septiembre en state.calendario. Cargar guardias ahí
+     las escribía dentro del objeto del mes equivocado: no se dibujaban nunca, pero sí
+     contaban en los badges y en el reporte de horas. */
+  const res = { anio, mes, aplicados: [], conflictos: [], pisados: [], sinResolver: [], semanaExtra: [], conAusencia: [] };
+  for (let d = 1; d <= total; d++) {
+    const f = `${anio}-${String(mes + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const dowLun = (new Date(anio, mes, d).getDay() + 6) % 7;
+    const semIdx = protoSemanaDe(anio, mes, d);
+    const capas = [];
+    ["dow", "sem", "mes"].forEach(capa => {
+      if (capa !== "dow" && semIdx >= PROTO_SEMANAS) return;
+      const txt = protoTexto(p, capa, semIdx, dowLun);
+      if (txt.trim()) capas.push({ capa, txt });
+    });
+    /* Un mes puede tener una sexta fila en la grilla (pasa varias veces al año) y las
+       pestañas por semana sólo llegan a la quinta: esos días quedan con la capa por día
+       de semana. Se listan en el resumen en vez de dejarlo pasar. */
+    /* Se pregunta por CONTENIDO y no por la existencia de las claves: protoCosechar
+       escribía las 35 celdas vacías con sólo abrir la pestaña B, así que el aviso salía
+       aunque no se hubiera perdido nada. */
+    if (semIdx >= PROTO_SEMANAS && protoTieneAlgo({ dow: {}, sem: p.sem, mes: p.mes })) res.semanaExtra.push(d);
+    if (!capas.length) continue;
+    const gana = capas[capas.length - 1];
+    if (capas.length > 1) res.conflictos.push({ dia: d, fecha: f, gana: gana.capa, capas: capas.map(c => c.capa) });
+    const asigs = protoParseCelda(gana.txt, dowLun);
+    if (!asigs.length) continue;
+    if (!state.calendario[f]) state.calendario[f] = { asignaciones: [], notas: "" };
+    /* Sólo cuenta como pisado si había guardias REALES. generarMesDesdeConfig pre-llena
+       todos los días con el esqueleto de turnos ⚠️ Pendiente, así que con la condición de
+       cardinalidad el aviso "se reemplazaron guardias ya cargadas en 31 días" salía
+       siempre en el flujo de "Empezar y aplicar prototipos", sobre un mes recién creado
+       en blanco. Un aviso destructivo que grita en falso se aprende a ignorar. */
+    if ((state.calendario[f].asignaciones || []).some(a => !esPendiente(a))) res.pisados.push(d);
+    state.calendario[f].asignaciones = asigs.map((a, i) => ({ ...a, id: Date.now() + d * 100 + i }));
+    asigs.forEach(a => { if (a.txt) res.sinResolver.push({ dia: d, txt: a.txt, motivo: a.protoMotivo }); });
+    /* Asignar al médico que está de licencia APAGA la alarma: diaAusSinCubrir sólo mira
+       que haya alguien puesto, no quién, así que el borde rojo del día y el badge de
+       Novedades desaparecen y queda un turno que nadie va a cubrir. */
+    try {
+      const aus = (typeof ausDeDia === "function") ? ausDeDia(f) : [];
+      asigs.forEach(a => {
+        const x = aus.find(z => Number(z.medicoId) === Number(a.medicoId) && Number(a.medicoId) !== 0);
+        if (x) { const m = getMedico(a.medicoId); res.conAusencia.push({ dia: d, medico: m ? m.sigla : "?", tipo: x.tipo || "ausencia" }); }
+      });
+    } catch (e) {}
+    /* El día se REESCRIBE entero, que es la operación más destructiva de la app, y era
+       la única que no dejaba rastro: el historial del día seguía mostrando "➕ Fulano
+       agregado" de una versión que ya no existe. */
+    try { if (typeof histLog === "function") histLog(f, "📐 Día reescrito por prototipo (" + gana.capa + "): " + nombresDeAsigs(asigs), ""); } catch (e) {}
+    res.aplicados.push(d);
+  }
+  return res;
+}
+
+// ─── PROTOTIPOS: MODAL Y ACCIONES ────────────────────────────
+/* El render reescribe el DOM entero, así que lo que el jefe está tipeando vive sólo en
+   los <textarea> hasta que alguien lo COSECHA. Toda acción que provoque un render
+   —cambiar de pestaña, guardar, aplicar, cerrar— tiene que llamar primero a esto, o el
+   trabajo de la pestaña visible se pierde sin dejar rastro. */
+function protoCosechar() {
+  const p = state.modalProto && state.modalProto.datos ? state.modalProto.datos : protoCargar();
+  document.querySelectorAll("#modal-proto textarea[data-proto]").forEach(ta => {
+    const [capa, semIdx, dowLun] = ta.getAttribute("data-proto").split("|");
+    const v = ta.value;
+    // Una celda vacía se BORRA en vez de guardarse como "": si no, abrir una pestaña y
+    // cerrarla dejaba el objeto lleno de cadenas vacías que después se leen como "hay
+    // prototipo por semana".
+    if (capa === "dow") { if (v.trim()) p.dow[dowLun] = v; else delete p.dow[dowLun]; }
+    else {
+      if (!p[capa]) p[capa] = {};
+      if (!p[capa][semIdx]) p[capa][semIdx] = {};
+      if (v.trim()) p[capa][semIdx][dowLun] = v; else delete p[capa][semIdx][dowLun];
+      if (!Object.keys(p[capa][semIdx]).length) delete p[capa][semIdx];
+    }
+  });
+  if (state.modalProto) state.modalProto.datos = p;
+  return p;
+}
+function abrirModalProto() {
+  state.modalProto = { tab: "dow", datos: protoCargar(), aviso: "" };
+  render();
+}
+function cerrarModalProto() {
+  if (state.modalProto) { const p = protoCosechar(); protoGuardar(p); }
+  state.modalProto = null;
+  render();
+}
+function protoTab(t) {
+  const p = protoCosechar();
+  state.modalProto.tab = t; state.modalProto.datos = p;
+  render();
+}
+function protoGuardarYAvisar() {
+  const p = protoCosechar();
+  if (protoGuardar(p)) { state.modalProto.aviso = "💾 Prototipo guardado."; render(); }
+}
+function protoLimpiarCapa() {
+  const t = state.modalProto.tab;
+  const nom = t === "dow" ? "por día de semana" : (t === "sem" ? "por semana" : "de mes completo");
+  if (!confirm("¿Borrar todo el prototipo " + nom + "? No se puede deshacer.")) return;
+  const p = protoCosechar();
+  if (t === "dow") p.dow = {}; else p[t] = {};
+  state.modalProto.datos = p;
+  protoGuardar(p);
+  state.modalProto.aviso = "🗑️ Prototipo " + nom + " vaciado.";
+  render();
+}
+
+/* Aplica y arma el resumen. Pide confirmación cuando va a pisar días que ya tienen
+   guardias: eso es lo único irreversible de toda la operación. */
+function protoAplicarAlMes() {
+  const p = protoCosechar();
+  // Si ni el prototipo entró en el almacenamiento, el mes tampoco va a entrar: se corta
+  // acá en vez de reescribir 31 días que sólo van a existir en memoria.
+  if (!protoGuardar(p)) return;
+  if (!protoTieneAlgo(p)) { alert("No hay nada escrito en ninguna de las tres pestañas."); return; }
+  // Se simula primero sobre una copia para poder avisar ANTES de tocar el calendario.
+  const respaldo = JSON.parse(JSON.stringify(state.calendario || {}));
+  const prev = protoAplicar(p);
+  if (prev.pisados.length) {
+    const ok = confirm("Se van a reemplazar las guardias de " + prev.pisados.length + " día(s) que ya tenían cargado: " +
+      prev.pisados.join(", ") + ".\n\n¿Aplicar igual?");
+    if (!ok) {
+      state.calendario = respaldo;
+      // historialMeses apunta al MISMO objeto que se mutó: sin esto quedaba con los
+      // prototipos que el jefe acaba de rechazar.
+      state.historialMeses[`${state.anio}-${state.mes}`] = respaldo;
+      render(); return;
+    }
+  }
+  /* Los modos "copiar día" e "intercambiar" apuntan a días que el prototipo acaba de
+     reescribir: el cartel seguiría diciendo "Día 5 copiado" y al pegar saldría el
+     contenido nuevo, no el que se copió. */
+  protoLimpiarModos();
+  state.protoResumen = prev;
+  state.protoConflictos = prev.conflictos.map(c => c.fecha);
+  state.modalProto = null;
+  if (!guardarEstado()) { state.protoResumen = null; state.protoConflictos = []; render(); return; }
+  render();
+}
+function protoLimpiarModos() {
+  state.copiarDiaOrigen = null; state.swapDiaOrigen = null;
+  state.swapMedicoOrigen = null; state.swapMedicoDestino = null;
+  state.medicoSelModal = new Set();
+}
+/* Tercera salida del modal de cambio de mes: arranca el mes en blanco y le aplica los
+   prototipos. Reusa aplicarCopia(false) para no duplicar la construcción del mes vacío
+   —que además pre-llena los turnos de la config como ⚠️ Pendiente— y encima corre las
+   tres capas. Sólo aparece si hay algo escrito en algún prototipo. */
+function aplicarCopiaProto() {
+  aplicarCopia(false);
+  const p = protoCargar();
+  const r = protoAplicar(p);
+  state.protoResumen = r;
+  state.protoConflictos = r.conflictos.map(c => c.fecha);
+  guardarEstado();
+  render();
+}
+function protoIrAConflicto() {
+  const f = (state.protoConflictos || [])[0];
+  if (!f) return;
+  /* Por abrirModalDia y no escribiendo state.modalDia a mano: esa función resetea la
+     selección de médicos (que si no se hereda de la apertura anterior) y respeta el modo
+     solo lectura. Escrito a mano, alguien sin sesión de jefe llegaba al modal EDITABLE
+     desde el banner, que sigue en pantalla después de cerrar sesión. */
+  if (state.jefe) abrirModalDia(f); else abrirDiaVista(f);
+}
+function protoCerrarResumen() {
+  state.protoResumen = null; state.protoConflictos = [];
+  render();
+}
+
+const PROTO_EJEMPLO = "QUI\\nS. Rodriguez N12\\nE. García A6 08-14hs";
+
+function protoCelda(p, capa, semIdx, dowLun, alto) {
+  const val = protoTexto(p, capa, semIdx, dowLun);
+  return `<textarea data-proto="${capa}|${semIdx}|${dowLun}" rows="${alto}" spellcheck="false"
+    placeholder="—"
+    style="width:100%;box-sizing:border-box;resize:vertical;font-family:inherit;font-size:0.72rem;line-height:1.35;
+           padding:5px 6px;border:1px solid #d1d5db;border-radius:6px;color:#111827;background:#fff"
+    >${escHTML(val)}</textarea>`;
+}
+
+function renderModalProto() {
+  if (!state.modalProto) return "";
+  const p = state.modalProto.datos || protoCargar();
+  const tab = state.modalProto.tab;
+  const cab = DOW_NOMBRE.map(n => `<th style="font-size:0.68rem;font-weight:700;color:#374151;text-align:left;padding:0 4px 4px">${n.slice(0,3)}</th>`).join("");
+
+  let cuerpo = "";
+  if (tab === "dow") {
+    cuerpo = `<table style="width:100%;table-layout:fixed;border-collapse:separate;border-spacing:4px 0">
+      <thead><tr>${cab}</tr></thead>
+      <tbody><tr>${DOW_NOMBRE.map((_, d) => `<td style="vertical-align:top">${protoCelda(p, "dow", "0", String(d), 5)}</td>`).join("")}</tr></tbody>
+    </table>`;
+  } else {
+    const filas = Array.from({ length: PROTO_SEMANAS }, (_, sIdx) =>
+      `<tr>
+        <td style="font-size:0.68rem;font-weight:700;color:#6b7280;padding-right:6px;white-space:nowrap;vertical-align:top;padding-top:6px">Sem ${sIdx + 1}</td>
+        ${DOW_NOMBRE.map((_, d) => `<td style="vertical-align:top;padding-bottom:4px">${protoCelda(p, tab, String(sIdx), String(d), 3)}</td>`).join("")}
+      </tr>`).join("");
+    cuerpo = `<table style="width:100%;table-layout:fixed;border-collapse:separate;border-spacing:4px 0">
+      <thead><tr><th></th>${cab}</tr></thead><tbody>${filas}</tbody></table>`;
+  }
+
+  /* "Semana N" es la FILA N del calendario, no "los primeros 7 días". La primera fila
+     casi nunca arranca en lunes: en agosto de 2026 son sólo el sábado 1 y el domingo 2.
+     Decirlo evita que el jefe escriba el lunes de la semana 1 esperando que caiga en el
+     día 3, que está en la fila 2. */
+  const ayuda = {
+    dow: "Base del mes: lo que se escriba acá se aplica a <b>todos</b> los lunes, todos los martes, etc.",
+    sem: "Ajustes de una semana puntual. <b>Pisa</b> al patrón por día de semana en esa semana. <b>«Semana 1» es la primera fila del calendario</b>, que suele estar incompleta.",
+    mes: "El mes entero armado a mano. <b>Pisa a las otras dos</b> capas. Las filas son las del calendario: la primera suele arrancar a mitad de semana.",
+  }[tab];
+
+  const tabBtn = (id, txt) => `<button onclick="protoTab('${id}')" style="flex:1;padding:7px 6px;border:1px solid ${tab===id?'#2563eb':'#d1d5db'};
+    background:${tab===id?'#eff6ff':'#fff'};color:${tab===id?'#1d4ed8':'#374151'};font-weight:${tab===id?'700':'600'};
+    font-size:0.76rem;border-radius:7px;cursor:pointer">${txt}</button>`;
+
+  return `<div class="modal-bg" onclick="if(event.target===this)cerrarModalProto()">
+    <div class="modal-box" id="modal-proto" style="max-width:960px;width:96vw">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px">
+        <div>
+          <div style="font-family:Georgia,serif;font-size:1.05rem;color:#111827">📐 Prototipos de guardia</div>
+          <div style="font-size:0.72rem;color:#6b7280;margin-top:3px">Se guardan en este navegador y sirven para cualquier mes.</div>
+        </div>
+        <button onclick="cerrarModalProto()" title="Cerrar y guardar" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280;line-height:1">✕</button>
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        ${tabBtn("dow", "A · Por día de semana")}
+        ${tabBtn("sem", "B · Por semana")}
+        ${tabBtn("mes", "C · Mes completo")}
+      </div>
+
+      <div style="font-size:0.73rem;color:#374151;background:#f8fafc;border:1px solid #e5e7eb;border-radius:7px;padding:8px 10px;margin-bottom:10px;line-height:1.5">
+        ${ayuda}<br>
+        Un médico por línea (o separados por coma). Se lo busca por <b>sigla</b> o <b>apellido</b>:
+        <code style="font-size:0.7rem">${escHTML(PROTO_EJEMPLO).replace(/\\n/g, " · ")}</code>.
+        Si no ponés turno, se usa el de la <b>plantilla de cobertura</b> de ese día en el orden en que escribiste los nombres.
+        Lo que no se pueda identificar entra como <b>⚠️ pendiente</b> conservando el texto, no se descarta.
+      </div>
+
+      ${cuerpo}
+
+      ${state.modalProto.aviso ? `<div style="margin-top:10px;font-size:0.76rem;color:#065f46;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:7px;padding:7px 10px">${escHTML(state.modalProto.aviso)}</div>` : ""}
+
+      <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap">
+        <button class="btn btn-secondary btn-sm" onclick="protoLimpiarCapa()" style="color:#b91c1c">🗑️ Vaciar esta pestaña</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm" onclick="protoGuardarYAvisar()">💾 Guardar</button>
+          <button class="btn btn-primary btn-sm" onclick="protoAplicarAlMes()">📐 Aplicar a ${MESES[state.mes]} ${state.anio}</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Banner con el resultado de la última aplicación. Vive en memoria: es una ayuda de
+// revisión, no un dato del mes.
+function renderProtoResumen() {
+  const r = state.protoResumen;
+  if (!r) return "";
+  // Es de otro mes: el jefe navegó. No se dibuja (y protoLimpiarRevision ya lo habrá
+  // vaciado; esto es la red por si algún camino de navegación se olvida de llamarla).
+  if (r.anio !== state.anio || r.mes !== state.mes) return "";
+  if (!state.jefe) return "";
+  const nConf = r.conflictos.length;
+  const listaConf = r.conflictos.map(c => c.dia).join(", ");
+  const NOMBRE_CAPA = { dow: "día de semana", sem: "semana", mes: "mes completo" };
+  return `<div style="background:#fffbeb;border:1px solid #f59e0b;border-radius:8px;padding:10px 14px;margin-bottom:10px">
+    <div style="font-size:0.82rem;color:#78350f;line-height:1.6">
+      Se escribi${r.aplicados.length!==1?"eron":"ó"} <b>${r.aplicados.length}</b> día${r.aplicados.length!==1?"s":""} a partir de los prototipos.
+      ${nConf ? `<b>${nConf}</b> conflicto${nConf!==1?"s":""} resuelto${nConf!==1?"s":""} por especificidad: días <b>${listaConf}</b> (ganó el prototipo ${NOMBRE_CAPA[r.conflictos[0].gana]}${r.conflictos.some(c=>c.gana!==r.conflictos[0].gana)?" y otros":""}).` : "Sin conflictos entre capas."}
+      ${r.pisados.length ? `<br>Se reemplazaron guardias que ya estaban cargadas en ${r.pisados.length} día${r.pisados.length!==1?"s":""}: ${r.pisados.join(", ")}.` : ""}
+      ${r.sinResolver.length ? `<br>⚠️ ${r.sinResolver.length} nombre${r.sinResolver.length!==1?"s":""} sin identificar, cargado${r.sinResolver.length!==1?"s":""} como pendiente: ${r.sinResolver.slice(0,6).map(x=>`día ${x.dia} «${escHTML(x.txt)}» (${escHTML(x.motivo)})`).join(" · ")}${r.sinResolver.length>6?" …":""}.` : ""}
+      ${r.conAusencia.length ? `<br>🔴 <b>${r.conAusencia.length === 1 ? "Un turno quedó asignado" : r.conAusencia.length + " turnos quedaron asignados"} a un médico con ausencia registrada ese día</b>: ${r.conAusencia.map(x=>`día ${x.dia} — ${escHTML(x.medico)} (${escHTML(x.tipo)})`).join(" · ")}. El día deja de figurar como descubierto aunque nadie lo cubra.` : ""}
+      ${r.semanaExtra.length ? `<br>Este mes tiene una sexta fila en la grilla y las pestañas por semana llegan hasta la quinta: ${r.semanaExtra.length === 1 ? `el día ${r.semanaExtra[0]} quedó` : `los días ${r.semanaExtra.join(", ")} quedaron`} sólo con el patrón por día de semana.` : ""}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      ${nConf ? `<button class="btn btn-secondary btn-sm" onclick="protoIrAConflicto()">🔍 Revisar conflictos</button>` : ""}
+      <button class="btn btn-secondary btn-sm" onclick="protoCerrarResumen()">Listo</button>
+    </div>
+  </div>`;
 }
 
 // ─── GESTOR DE AUSENCIAS Y SOLICITUDES ───────────────────────
@@ -1946,6 +2402,7 @@ function borrarAusencia(id) {
 }
 
 function irHoy() {
+  protoLimpiarRevision();
   const hoy = new Date();
   state.mes = hoy.getMonth();
   state.anio = hoy.getFullYear();
@@ -1964,7 +2421,13 @@ function nextMes() {
   irAMes(na, nm);
 }
 
+// El banner de prototipos y el resaltado ámbar son de UN mes: al navegar dejan de
+// aplicar, y si sobreviven "Revisar conflictos" abre una fecha que no pertenece al
+// calendario cargado.
+function protoLimpiarRevision() { state.protoResumen = null; state.protoConflictos = []; }
+
 function irAMes(anioNuevo, mesNuevo) {
+  protoLimpiarRevision();
   // Guardar mes actual (memoria + localStorage)
   state.historialMeses[`${state.anio}-${state.mes}`] = state.calendario;
   guardarEstado();
@@ -3168,7 +3631,10 @@ function renderModalResumen() {
   } else {
     fechas.forEach(f => {
       (diaData(f).asignaciones || []).filter(esPendiente).forEach(a => {
-        filas.push({ fecha: f, detalle: `⚠ Pendiente · ${escHTML(etiquetaTurno(a))}` });
+        /* Se arrastra el texto del prototipo: sin él la lista de pendientes son N filas
+           idénticas ("Pendiente · Diurno 08–20 hs") y el único dato accionable —qué
+           nombre no se pudo identificar— queda escondido en el modal de cada día. */
+        filas.push({ fecha: f, detalle: `⚠ Pendiente · ${escHTML(etiquetaTurno(a))}` + (a.txt ? ` · «${escHTML(a.txt)}»` : "") });
       });
     });
   }
