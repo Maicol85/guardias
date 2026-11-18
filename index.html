@@ -132,6 +132,14 @@ button { font-family: inherit; cursor: pointer; }
 .stats-row { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr 1fr; border-top: 1px solid #d1d5db; align-items: center; }
 .stats-row:nth-child(even) { background: #fafafa; }
 .stats-td { padding: 10px 16px; }
+/* Tabla única de Estadísticas: siete columnas y filas más bajas, para que el equipo
+   entero entre en pantalla sin scrollear. */
+.stats7 { display: grid; grid-template-columns: 2.2fr .8fr .8fr .8fr .8fr 1fr 1fr; align-items: center; }
+.stats7 .stats-td { padding: 5px 10px; }
+.stats7 .stats-th { padding: 7px 10px; }
+.stats-tot { background: #eef2f7 !important; font-weight: 700; }
+.graf-app { margin-top: 16px; background: #fff; border: 1px solid #d1d5db; border-radius: 10px; padding: 12px 14px; }
+.graf-app .graf-tit { font-size: 0.72rem; color: #6b7280; margin-bottom: 8px; line-height: 1.4; }
 
 /* MODAL BASE */
 .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 16px; }
@@ -318,6 +326,7 @@ let state = {
   config: null,           // configuración del servicio (se carga en initPatronDefault)
   modalPDF: null,         // opciones de exportación de PDF elegidas en el modal
   statsPeriodo: null,     // período elegido en la pestaña Estadísticas
+  statsGrafica: false,    // gráfica de barras desplegada en Estadísticas
   menuToolbar: false,     // menú "≡" de la toolbar desplegado
   leyendaGrupo: null,     // grupo de la leyenda desplegado (acordeón); null = todos colapsados
   compartido: false,      // true al abrir un link ?share= : solo lectura, sin persistencia
@@ -340,6 +349,11 @@ function getRol(id) { return ROLES_BASE.find(r => r.id === id) || ROLES_BASE[0];
 // Horario efectivo de una asignación: usa el override editable por médico/día si existe, si no el del rol.
 function horarioDe(a) { return (a && a.horario != null && String(a.horario).trim() !== "") ? String(a.horario) : getRol(a.rol).label; }
 function escAttr(s) { return escHTML(s).replace(/"/g, "&quot;"); }
+/* Id que se va a interpolar DENTRO de un manejador inline o de un atributo. Ahí escapar
+   no alcanza: el parser decodifica la entidad ANTES de compilar el handler, así que un id
+   hostil guardado en el almacenamiento se ejecutaría igual. Se sanea como número en el
+   borde, que es la única forma de cerrarlo. */
+function numId(v) { const n = Number(v); return Number.isFinite(n) ? String(n) : "0"; }
 
 // ─── NOTAS DEL MES (localStorage) ────────────────────────────
 function escHTML(s) {
@@ -1399,35 +1413,46 @@ function renderEstadisticas() {
   const ag = perValido(p) ? perAgregar(p) : { filas: [], meses: [], sinDatos: [] };
   const filas = ag.filas;
   const et = escHTML(perEtiqueta(p));
-  const vacio = '<div style="padding:14px;text-align:center;color:#6b7280;font-size:0.82rem">Sin guardias cargadas en el período.</div>';
+  const num = (v, extra) => '<div class="stats-td" style="text-align:center;font-size:0.84rem;' + (extra || "") + '">' + v + '</div>';
 
-  const distrib = filas.length ? filas.map((x, i) => '<div class="stats-row" style="background:' + (i % 2 === 0 ? "#fff" : "#fafafa") + '">' +
-      '<div class="stats-td" style="display:flex;align-items:center;gap:8px">' + renderAvatar(x.medico, 28) +
-      '<span style="font-size:0.83rem;font-weight:600;color:#111827">' + escHTML(x.medico.nombre) + '</span></div>' +
-      '<div class="stats-td"><span style="font-family:Georgia,serif;font-size:1.3rem;color:' + escAttr(x.medico.color) + ';font-weight:700">' + x.guardias + '</span></div>' +
-      '<div class="stats-td"><span style="font-family:Georgia,serif;font-size:1rem;color:#374151;font-weight:500">' + x.dia + '</span></div>' +
-      '<div class="stats-td"><span style="font-family:Georgia,serif;font-size:1rem;color:#374151;font-weight:500">' + x.noche + '</span></div>' +
-      '<div class="stats-td"><span style="font-family:Georgia,serif;font-size:1rem;color:#374151;font-weight:500">' + x.apoyo + '</span></div>' +
-    '</div>').join("") : vacio;
+  const cuerpo = filas.length ? filas.map((x, i) => '<div class="stats-row stats7" style="background:' + (i % 2 === 0 ? "#fff" : "#fafafa") + '">' +
+      '<div class="stats-td" style="display:flex;align-items:center;gap:8px">' + renderAvatar(x.medico, 24) +
+      '<span style="font-size:0.82rem;font-weight:600;color:#111827">' + escHTML(x.medico.nombre) + '</span></div>' +
+      num('<span style="font-family:Georgia,serif;font-size:1.05rem;color:' + escAttr(x.medico.color) + ';font-weight:700">' + x.guardias + '</span>') +
+      num(x.dia) + num(x.noche) + num(x.apoyo) +
+      num(fmtH(x.horas) + ' h', "font-weight:700") +
+      num(fmtH(x.promedio) + ' h', "color:#6b7280") +
+    '</div>').join("")
+    : '<div style="padding:16px;text-align:center;color:#6b7280;font-size:0.82rem">Sin guardias cargadas en el período.</div>';
 
-  const horas = filas.length ? filas.map((x, i) => '<div class="stats-row" style="background:' + (i % 2 === 0 ? "#fff" : "#fafafa") + ';display:grid;grid-template-columns:2fr 1fr 1fr 1fr">' +
-      '<div class="stats-td" style="display:flex;align-items:center;gap:8px">' + renderAvatar(x.medico, 26) +
-      '<span style="font-size:0.83rem;font-weight:600;color:#111827">' + escHTML(x.medico.nombre) + '</span></div>' +
-      '<div class="stats-td" style="text-align:center;font-size:0.83rem">' + x.guardias + '</div>' +
-      '<div class="stats-td" style="text-align:center;font-size:0.83rem;font-weight:700">' + fmtH(x.horas) + ' h</div>' +
-      '<div class="stats-td" style="text-align:center;font-size:0.83rem;color:#6b7280">' + fmtH(x.promedio) + ' h</div>' +
-    '</div>').join("") : vacio;
+  const tot = filas.reduce((t, x) => ({
+    guardias: t.guardias + x.guardias, dia: t.dia + x.dia, noche: t.noche + x.noche,
+    apoyo: t.apoyo + x.apoyo, horas: t.horas + x.horas,
+  }), { guardias: 0, dia: 0, noche: 0, apoyo: 0, horas: 0 });
+  const pie = filas.length ? '<div class="stats-row stats7 stats-tot">' +
+      '<div class="stats-td" style="font-size:0.78rem;font-weight:700;color:#111827">TOTALES</div>' +
+      num(tot.guardias) + num(tot.dia) + num(tot.noche) + num(tot.apoyo) +
+      num(fmtH(tot.horas) + ' h') +
+      num(fmtH(tot.guardias ? tot.horas / tot.guardias : 0) + ' h', "color:#6b7280") +
+    '</div>' : "";
+
+  const grafica = (state.statsGrafica && filas.length)
+    ? '<div class="graf-app">' + pdfGraficaHoras(ag) + '</div>'
+    : "";
 
   return renderSelectorPeriodo("stats") +
-    '<div class="section-title">' + et + ' — Distribución de guardias</div>' +
-    '<div class="card-wrap"><div class="stats-header">' +
-      ["Médico", "Total", "☀️ Día 08-20", "🌙 Noche 20-08", "+ Apoyo"].map(h => '<div class="stats-th">' + h + '</div>').join("") +
-    '</div>' + distrib + '</div>' +
-    '<div class="section-title" style="margin-top:22px">' + et + ' — Resumen de horas por médico</div>' +
-    '<div class="card-wrap"><div class="stats-header" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr">' +
-      ["Médico", "Guardias", "Horas totales", "Promedio"].map(h => '<div class="stats-th">' + h + '</div>').join("") +
-    '</div>' + horas + '</div>';
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px">' +
+      '<div class="section-title" style="margin:0">Guardias y horas — ' + et + '</div>' +
+      (filas.length ? '<button class="btn btn-secondary btn-sm" onclick="toggleStatsGrafica()">' +
+        (state.statsGrafica ? "▴ Ocultar gráfica" : "▾ Ver gráfica") + '</button>' : "") +
+    '</div>' +
+    '<div class="card-wrap">' +
+      '<div class="stats-header stats7">' +
+        ["Médico", "Total", "☀️ Día", "🌙 Noche", "+ Apoyo", "Horas", "Promedio"].map(h => '<div class="stats-th">' + h + '</div>').join("") +
+      '</div>' + cuerpo + pie +
+    '</div>' + grafica;
 }
+function toggleStatsGrafica() { state.statsGrafica = !state.statsGrafica; render(); }
 
 // ─── RENDER MODAL DÍA ────────────────────────────────────────
 function renderModalDia() {
@@ -1872,13 +1897,81 @@ function protoNorm(s) {
   return String(s == null ? "" : s).normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .replace(/[.\-_]/g, " ").replace(/\s+/g, " ").trim().toLowerCase();
 }
+// ─── PROTOTIPOS: ALIAS APRENDIDOS ────────────────────────────
+/* Cada vez que el jefe confirma a quién se refería un texto que la app no supo resolver,
+   la elección se guarda acá y la próxima vez se reconoce sola. Es la diferencia entre una
+   ayuda que aprende y una que vuelve a preguntar lo mismo todos los meses. */
+const ALIAS_KEY = "guardias_alias";
+function aliasCargar() {
+  try {
+    const o = JSON.parse(localStorage.getItem(ALIAS_KEY));
+    return (o && typeof o === "object") ? o : {};
+  } catch (e) { return {}; }
+}
+function aliasSet(txt, medicoId) {
+  const k = protoNorm(txt);
+  if (!k || !Number(medicoId)) return false;
+  if (state.compartido) return false;
+  try {
+    const o = aliasCargar();
+    o[k] = Number(medicoId);
+    localStorage.setItem(ALIAS_KEY, JSON.stringify(o));
+    return true;
+  } catch (e) { return false; }
+}
+function aliasBorrar(k) {
+  try { const o = aliasCargar(); delete o[protoNorm(k)]; localStorage.setItem(ALIAS_KEY, JSON.stringify(o)); } catch (e) {}
+}
+
+// Forma del nombre sin iniciales: "S. Dos Santos" y "Dos Santos" se vuelven lo mismo.
+// Las letras sueltas son iniciales, no apellidos.
+function protoSinIniciales(s) {
+  return protoNorm(s).split(" ").filter(w => w.length > 1).join(" ");
+}
+// Distancia de edición, para tolerar un error de tipeo (no para adivinar apellidos).
+function protoDistancia(a, b) {
+  a = String(a); b = String(b);
+  if (a === b) return 0;
+  if (!a.length || !b.length) return Math.max(a.length, b.length);
+  let prev = [];
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    const fila = [i];
+    for (let j = 1; j <= b.length; j++) {
+      fila[j] = Math.min(prev[j] + 1, fila[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = fila;
+  }
+  return prev[b.length];
+}
+
+/* Dos nombres pegados sin salto de línea ("TrivelDos Santos"). Se corta donde una
+   minúscula pega con una mayúscula y SÓLO se acepta el corte si las dos mitades resuelven
+   con certeza: cortar por la forma de las letras y después adivinar sería poner a dos
+   personas en guardias que no son suyas. */
+function protoPartirPegado(txt) {
+  const s = String(txt || "");
+  for (let i = 1; i < s.length; i++) {
+    const ant = s[i - 1], act = s[i];
+    if (!/[a-záéíóúñ]/.test(ant) || !/[A-ZÁÉÍÓÚÑ]/.test(act)) continue;
+    const a = s.slice(0, i).trim(), b = s.slice(i).trim();
+    if (!a || !b) continue;
+    const ra = protoResolver(a, true), rb = protoResolver(b, true);
+    if (ra.medico && rb.medico) return [a, b];
+  }
+  return null;
+}
+
 /* Resuelve un texto a un médico de la lista. Devuelve {medico} | {ambiguo:[...]} | {no:true}.
    El orden importa: sigla exacta primero, después nombre exacto, y recién ahí la búsqueda
    parcial. Sin ese orden, escribir una sigla que además es parte de un apellido daría el
    médico equivocado sin avisar. */
-function protoResolver(txt) {
+function protoResolver(txt, soloCierto) {
   const t = protoNorm(txt);
   if (!t) return { no: true };
+  // 0. Lo que el jefe ya confirmó una vez vale como certeza.
+  const al = aliasCargar()[t];
+  if (al) { const m = getMedico(al); if (m && Number(al) !== 0) return { medico: m, alias: true }; }
   let c = medicos.filter(m => protoNorm(m.sigla) === t);
   if (c.length === 1) return { medico: c[0] };
   c = medicos.filter(m => protoNorm(m.nombre) === t);
@@ -1893,6 +1986,33 @@ function protoResolver(txt) {
     c = medicos.filter(m => protoNorm(m.nombre).indexOf(t) >= 0);
     if (c.length === 1) return { medico: c[0] };
     if (c.length > 1) return { ambiguo: c };
+  }
+  if (soloCierto) return { no: true };
+
+  /* De acá para abajo es reconocimiento APROXIMADO: no asigna, propone. Ignora tildes,
+     mayúsculas, puntos e iniciales, y tolera un error de tipeo. Lo que sale de acá entra
+     igual como turno pendiente y espera que el jefe lo confirme en el aviso: adivinar
+     entre dos apellidos parecidos pone a alguien en una guardia que no es suya, y eso no
+     se ve hasta que ese día no aparece nadie. */
+  const ti = protoSinIniciales(txt);
+  if (ti.length >= 3) {
+    let ap = medicos.filter(m => protoSinIniciales(m.nombre) === ti);
+    if (ap.length === 1) return { propuesta: ap[0], motivo: "por el apellido, sin iniciales" };
+    if (ap.length > 1) return { ambiguo: ap };
+    ap = medicos.filter(m => {
+      const n = protoSinIniciales(m.nombre);
+      return n.indexOf(ti) >= 0 || ti.indexOf(n) >= 0;
+    });
+    if (ap.length === 1) return { propuesta: ap[0], motivo: "por parte del apellido" };
+    if (ap.length > 1) return { ambiguo: ap };
+  }
+  if (ti.length >= 4) {
+    const tope = ti.length <= 6 ? 1 : 2;   // un error de tipeo, dos en nombres largos
+    const cerca = medicos.map(m => ({ m: m, d: protoDistancia(ti, protoSinIniciales(m.nombre)) }))
+      .filter(x => x.d <= tope).sort((a, b) => a.d - b.d);
+    if (cerca.length === 1) return { propuesta: cerca[0].m, motivo: "parecido a lo escrito" };
+    if (cerca.length > 1 && cerca[0].d < cerca[1].d) return { propuesta: cerca[0].m, motivo: "parecido a lo escrito" };
+    if (cerca.length > 1) return { ambiguo: cerca.map(x => x.m) };
   }
   return { no: true };
 }
@@ -1911,7 +2031,9 @@ function protoParseCelda(txt, dowLun) {
   const cfgT = ((state.config || {}).turnos || {})[dowLun] || [];
   const esperados = [];
   cfgT.forEach(t => { for (let i = 0; i < Math.max(1, Number(t.requeridos) || 1); i++) esperados.push(t); });
-  return partes.map((entrada, i) => {
+
+  const salida = [];
+  partes.forEach(entrada => {
     let resto = entrada, rol = null, horario = null;
     /* Se consumen los modificadores del final EN BUCLE, en cualquier orden. Con un paso
        fijo horario→rol, escribir "E. García 08-14hs A6" dejaba resto="E. García 08-14hs"
@@ -1931,26 +2053,51 @@ function protoParseCelda(txt, dowLun) {
       }
       break;
     }
-    if (!rol) { const e = esperados[i]; rol = e ? e.rol : "D12"; if (!horario && e && e.horario) horario = e.horario; }
-    /* El horario se guarda SÓLO si difiere del rótulo del rol. La plantilla de cobertura
-       suele traer justamente ese rótulo, y grabarlo como override no cambiaba nada en
-       pantalla pero dejaba un horario fijo pegado a cada turno: al cambiarle el rol
-       después, seguiría mostrando el horario viejo. Además engorda el link compartido. */
-    if (horario && String(horario).trim() === String(getRol(rol).label).trim()) horario = null;
-    const r = protoResolver(resto);
-    if (r.medico) {
-      const o = { medicoId: r.medico.id, rol };
-      if (horario) o.horario = horario;
-      return o;
-    }
-    /* Ambiguo y no encontrado se distinguen en el mensaje pero terminan igual: pendiente.
-       Adivinar entre dos apellidos parecidos pondría a un médico en una guardia que no es
-       suya, y eso no se ve hasta que alguien no aparece. */
-    const o = { medicoId: 0, rol: rol || "D12", txt: entrada };
-    o.protoMotivo = r.ambiguo ? ("ambiguo: " + r.ambiguo.map(m => m.sigla).join(" / ")) : "sin coincidencia";
-    if (horario) o.horario = horario;
-    return o;
+    /* Dos apellidos pegados sin salto de línea ("TrivelDos Santos") son DOS médicos y
+       ocupan dos turnos del día, no uno. Sólo se parte si las dos mitades resuelven con
+       certeza; si no, la entrada sigue su camino entera. */
+    const pegado = protoPartirPegado(resto);
+    const nombres = pegado || [resto];
+    nombres.forEach((nom, k) => {
+      const i = salida.length;
+      let rolK = rol, horarioK = horario;
+      if (!rolK || k > 0) {
+        const e = esperados[i];
+        if (!rolK) { rolK = e ? e.rol : "D12"; if (!horarioK && e && e.horario) horarioK = e.horario; }
+      }
+      /* El horario se guarda SÓLO si difiere del rótulo del rol. La plantilla de cobertura
+         suele traer justamente ese rótulo, y grabarlo como override no cambiaba nada en
+         pantalla pero dejaba un horario fijo pegado a cada turno: al cambiarle el rol
+         después, seguiría mostrando el horario viejo. Además engorda el link compartido. */
+      let h = horarioK;
+      if (h && String(h).trim() === String(getRol(rolK).label).trim()) h = null;
+      const r = protoResolver(nom);
+      if (r.medico) {
+        const o = { medicoId: r.medico.id, rol: rolK };
+        if (h) o.horario = h;
+        if (pegado) o.protoPartido = entrada;
+        salida.push(o);
+        return;
+      }
+      /* Ambiguo, propuesta y sin coincidencia terminan igual: pendiente conservando el
+         texto. La diferencia la hace el aviso posterior, que ofrece el candidato o la
+         lista para elegir. */
+      const o = { medicoId: 0, rol: rolK || "D12", txt: nom };
+      if (r.propuesta) {
+        o.protoPropuesta = r.propuesta.id;
+        o.protoMotivo = "¿" + r.propuesta.nombre + "? (" + r.motivo + ")";
+      } else if (r.ambiguo) {
+        o.protoCandidatos = r.ambiguo.map(m => m.id);
+        o.protoMotivo = "ambiguo: " + r.ambiguo.map(m => m.sigla).join(" / ");
+      } else {
+        o.protoMotivo = "sin coincidencia";
+      }
+      if (h) o.horario = h;
+      if (pegado) o.protoPartido = entrada;
+      salida.push(o);
+    });
   });
+  return salida;
 }
 
 // Semana (0-based) que le toca a un día en la grilla del mes, que arranca en lunes.
@@ -1975,7 +2122,7 @@ function protoAplicar(p) {
      de agosto con el calendario de septiembre en state.calendario. Cargar guardias ahí
      las escribía dentro del objeto del mes equivocado: no se dibujaban nunca, pero sí
      contaban en los badges y en el reporte de horas. */
-  const res = { anio, mes, aplicados: [], conflictos: [], pisados: [], sinResolver: [], semanaExtra: [], conAusencia: [] };
+  const res = { anio, mes, aplicados: [], conflictos: [], pisados: [], sinResolver: [], semanaExtra: [], conAusencia: [], partidos: [] };
   for (let d = 1; d <= total; d++) {
     const f = `${anio}-${String(mes + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
     const dowLun = (new Date(anio, mes, d).getDay() + 6) % 7;
@@ -2006,7 +2153,23 @@ function protoAplicar(p) {
        en blanco. Un aviso destructivo que grita en falso se aprende a ignorar. */
     if ((state.calendario[f].asignaciones || []).some(a => !esPendiente(a))) res.pisados.push(d);
     state.calendario[f].asignaciones = asigs.map((a, i) => ({ ...a, id: Date.now() + d * 100 + i }));
-    asigs.forEach(a => { if (a.txt) res.sinResolver.push({ dia: d, txt: a.txt, motivo: a.protoMotivo }); });
+    /* De cada caso sin resolver se guarda DÓNDE quedó (fecha + posición dentro del día),
+       además del texto: es lo que permite que el aviso posterior lo complete sin que el
+       jefe tenga que ir a buscar el día a mano. */
+    asigs.forEach((a, i) => {
+      if (!a.txt) return;
+      res.sinResolver.push({
+        dia: d, fecha: f, idx: i, txt: a.txt, motivo: a.protoMotivo || "sin coincidencia",
+        propuesta: a.protoPropuesta || null, candidatos: a.protoCandidatos || null,
+      });
+    });
+    // Un aviso por día y por texto: las dos mitades de un pegado son el mismo hallazgo.
+    const yaAvisado = {};
+    asigs.forEach(a => {
+      if (!a.protoPartido || yaAvisado[a.protoPartido]) return;
+      yaAvisado[a.protoPartido] = true;
+      res.partidos.push({ dia: d, txt: a.protoPartido });
+    });
     /* Asignar al médico que está de licencia APAGA la alarma: diaAusSinCubrir sólo mira
        que haya alguien puesto, no quién, así que el borde rojo del día y el badge de
        Novedades desaparecen y queda un turno que nadie va a cubrir. */
@@ -2051,7 +2214,13 @@ function protoCosechar() {
   return p;
 }
 function abrirModalProto() {
-  state.modalProto = { tab: "dow", datos: protoCargar(), aviso: "" };
+  state.modalProto = { tab: "dow", datos: protoCargar(), aviso: "", vaciar: false };
+  render();
+}
+// La casilla se cosecha junto con los textos: cambiar de pestaña vuelve a dibujar el modal.
+function protoToggleVaciar() {
+  if (!state.modalProto) return;
+  state.modalProto.vaciar = !state.modalProto.vaciar;
   render();
 }
 function cerrarModalProto() {
@@ -2090,8 +2259,21 @@ function protoAplicarAlMes() {
   if (!protoTieneAlgo(p)) { alert("No hay nada escrito en ninguna de las tres pestañas."); return; }
   // Se simula primero sobre una copia para poder avisar ANTES de tocar el calendario.
   const respaldo = JSON.parse(JSON.stringify(state.calendario || {}));
+  /* Vaciar es lo único que destruye datos que el prototipo después NO vuelve a escribir,
+     así que la confirmación dice cuántos días se van y hay que aceptarla antes de tocar
+     nada. Si el jefe dice que no, no se vacía y tampoco se aplica: cancelar es cancelar. */
+  const vaciar = !!(state.modalProto && state.modalProto.vaciar);
+  if (vaciar) {
+    const conGuardias = Object.keys(state.calendario || {}).filter(f => ((state.calendario[f] || {}).asignaciones || []).some(a => !esPendiente(a))).length;
+    const ok = confirm("⚠️ VACIAR " + MESES[state.mes].toUpperCase() + " " + state.anio + "\n\n" +
+      "Se van a BORRAR las guardias de " + conGuardias + " día(s) y recién después se aplica el prototipo.\n" +
+      "Los días que el prototipo no cubra quedan vacíos. No se puede deshacer.\n\n¿Vaciar y aplicar?");
+    if (!ok) return;
+    state.calendario = generarMesVacio(state.anio, state.mes);
+    state.historialMeses[`${state.anio}-${state.mes}`] = state.calendario;
+  }
   const prev = protoAplicar(p);
-  if (prev.pisados.length) {
+  if (prev.pisados.length && !vaciar) {
     const ok = confirm("Se van a reemplazar las guardias de " + prev.pisados.length + " día(s) que ya tenían cargado: " +
       prev.pisados.join(", ") + ".\n\n¿Aplicar igual?");
     if (!ok) {
@@ -2139,6 +2321,59 @@ function protoIrAConflicto() {
      desde el banner, que sigue en pantalla después de cerrar sesión. */
   if (state.jefe) abrirModalDia(f); else abrirDiaVista(f);
 }
+/* Completa a mano uno de los casos que el prototipo no supo resolver y se lo aprende:
+   la próxima vez que aparezca ese mismo texto, se reconoce solo. */
+function protoAsignarCaso(i, medicoId) {
+  const r = state.protoResumen;
+  if (!r || !state.jefe) return;
+  const c = r.sinResolver[i];
+  const m = getMedico(medicoId);
+  if (!c || !m || Number(medicoId) === 0) return;
+  if (r.anio !== state.anio || r.mes !== state.mes) return;   // el jefe navegó de mes
+  const dia = (state.calendario[c.fecha] || {}).asignaciones || [];
+  /* La posición puede haberse movido si el día se editó a mano después de aplicar: se
+     verifica el texto y, si no coincide, se busca el pendiente que lo tenga. */
+  let a = dia[c.idx];
+  if (!a || a.txt !== c.txt) a = dia.find(x => x && x.txt === c.txt && esPendiente(x));
+  if (!a) { r.sinResolver.splice(i, 1); render(); return; }
+  const clave = protoNorm(c.txt);
+  aliasSet(c.txt, m.id);
+  /* El mismo texto suele repetirse en todos los lunes del mes. Confirmarlo una vez lo
+     resuelve en todo el período: si no, el jefe contesta cinco veces la misma pregunta y
+     la quinta la contesta sin leerla. */
+  let n = 0;
+  for (let k = r.sinResolver.length - 1; k >= 0; k--) {
+    const c2 = r.sinResolver[k];
+    if (k !== i && protoNorm(c2.txt) !== clave) continue;
+    const asigs2 = (state.calendario[c2.fecha] || {}).asignaciones || [];
+    let a2 = asigs2[c2.idx];
+    if (!a2 || a2.txt !== c2.txt) a2 = asigs2.find(x => x && x.txt === c2.txt && esPendiente(x));
+    if (a2) {
+      a2.medicoId = m.id;
+      delete a2.txt; delete a2.protoMotivo; delete a2.protoPropuesta; delete a2.protoCandidatos;
+      try { histLog(c2.fecha, "✍️ " + m.nombre + " confirmado desde el prototipo («" + c2.txt + "»)", ""); } catch (e) {}
+      n++;
+    }
+    r.sinResolver.splice(k, 1);
+  }
+  r.avisoCasos = n > 1
+    ? ("✓ " + m.nombre + " quedó puesto en " + n + " días (todos los que decían «" + c.txt + "»).")
+    : ("✓ " + m.nombre + " quedó puesto en el día " + c.dia + ".");
+  if (!guardarEstado()) return;
+  render();
+}
+// Elegir del desplegable de un caso (el botón lee el valor y llama a protoAsignarCaso).
+function protoAsignarDeSelect(i) {
+  const sel = document.getElementById("proto-sel-" + numId(i));
+  if (sel) protoAsignarCaso(i, sel.value);
+}
+function protoDescartarCaso(i) {
+  const r = state.protoResumen;
+  if (!r) return;
+  r.sinResolver.splice(i, 1);   // queda como ⚠️ pendiente en el día, que es lo que ya era
+  render();
+}
+
 function protoCerrarResumen() {
   state.protoResumen = null; state.protoConflictos = [];
   render();
@@ -2219,6 +2454,16 @@ function renderModalProto() {
 
       ${state.modalProto.aviso ? `<div style="margin-top:10px;font-size:0.76rem;color:#065f46;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:7px;padding:7px 10px">${escHTML(state.modalProto.aviso)}</div>` : ""}
 
+      <label style="display:flex;align-items:center;gap:8px;margin-top:12px;padding:8px 10px;border:1px solid ${state.modalProto.vaciar ? "#dc2626" : "#e5e7eb"};background:${state.modalProto.vaciar ? "#fef2f2" : "#f8fafc"};border-radius:7px;cursor:pointer">
+        <input type="checkbox" ${state.modalProto.vaciar ? "checked" : ""} onchange="protoToggleVaciar()" style="width:16px;height:16px;accent-color:#dc2626;cursor:pointer">
+        <span style="font-size:0.78rem;color:${state.modalProto.vaciar ? "#991b1b" : "#374151"};font-weight:${state.modalProto.vaciar ? "700" : "600"}">
+          Vaciar ${MESES[state.mes]} ${state.anio} antes de aplicar
+          <span style="display:block;font-weight:400;font-size:0.72rem;color:#6b7280;margin-top:1px">
+            Borra TODAS las guardias del mes y después escribe el prototipo. Los días que el prototipo no cubra quedan vacíos. Pide confirmación.
+          </span>
+        </span>
+      </label>
+
       <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;margin-top:14px;flex-wrap:wrap">
         <button class="btn btn-secondary btn-sm" onclick="protoLimpiarCapa()" style="color:#b91c1c">🗑️ Vaciar esta pestaña</button>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -2247,15 +2492,47 @@ function renderProtoResumen() {
       Se escribi${r.aplicados.length!==1?"eron":"ó"} <b>${r.aplicados.length}</b> día${r.aplicados.length!==1?"s":""} a partir de los prototipos.
       ${nConf ? `<b>${nConf}</b> conflicto${nConf!==1?"s":""} resuelto${nConf!==1?"s":""} por especificidad: días <b>${listaConf}</b> (ganó el prototipo ${NOMBRE_CAPA[r.conflictos[0].gana]}${r.conflictos.some(c=>c.gana!==r.conflictos[0].gana)?" y otros":""}).` : "Sin conflictos entre capas."}
       ${r.pisados.length ? `<br>Se reemplazaron guardias que ya estaban cargadas en ${r.pisados.length} día${r.pisados.length!==1?"s":""}: ${r.pisados.join(", ")}.` : ""}
-      ${r.sinResolver.length ? `<br>⚠️ ${r.sinResolver.length} nombre${r.sinResolver.length!==1?"s":""} sin identificar, cargado${r.sinResolver.length!==1?"s":""} como pendiente: ${r.sinResolver.slice(0,6).map(x=>`día ${x.dia} «${escHTML(x.txt)}» (${escHTML(x.motivo)})`).join(" · ")}${r.sinResolver.length>6?" …":""}.` : ""}
+      ${r.sinResolver.length ? `<br>⚠️ ${r.sinResolver.length} nombre${r.sinResolver.length!==1?"s":""} sin identificar, cargado${r.sinResolver.length!==1?"s":""} como pendiente. Completalos acá abajo.` : ""}
+      ${r.partidos.length ? `<br>✂️ Se separó en dos médicos lo que estaba escrito junto: ${r.partidos.slice(0,6).map(x=>`día ${x.dia} «${escHTML(x.txt)}»`).join(" · ")}${r.partidos.length>6?" …":""}.` : ""}
       ${r.conAusencia.length ? `<br>🔴 <b>${r.conAusencia.length === 1 ? "Un turno quedó asignado" : r.conAusencia.length + " turnos quedaron asignados"} a un médico con ausencia registrada ese día</b>: ${r.conAusencia.map(x=>`día ${x.dia} — ${escHTML(x.medico)} (${escHTML(x.tipo)})`).join(" · ")}. El día deja de figurar como descubierto aunque nadie lo cubra.` : ""}
       ${r.semanaExtra.length ? `<br>Este mes tiene una sexta fila en la grilla y las pestañas por semana llegan hasta la quinta: ${r.semanaExtra.length === 1 ? `el día ${r.semanaExtra[0]} quedó` : `los días ${r.semanaExtra.join(", ")} quedaron`} sólo con el patrón por día de semana.` : ""}
     </div>
+    ${r.avisoCasos ? `<div style="margin-top:7px;font-size:0.78rem;color:#065f46;background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;padding:6px 9px">${escHTML(r.avisoCasos)}</div>` : ""}
+    ${renderProtoCasos(r)}
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
       ${nConf ? `<button class="btn btn-secondary btn-sm" onclick="protoIrAConflicto()">🔍 Revisar conflictos</button>` : ""}
       <button class="btn btn-secondary btn-sm" onclick="protoCerrarResumen()">Listo</button>
     </div>
   </div>`;
+}
+
+/* Un renglón por nombre sin identificar. Con un solo candidato se propone y alcanza un
+   clic; con varios o ninguno se ofrece la lista entera. Lo que se elija se guarda como
+   alias, así que esto se hace una vez por nombre y no todos los meses. */
+function renderProtoCasos(r) {
+  const casos = r.sinResolver || [];
+  if (!casos.length || !state.jefe) return "";
+  const TOPE = 12;
+  const filas = casos.slice(0, TOPE).map((c, i) => {
+    const prop = c.propuesta ? getMedico(c.propuesta) : null;
+    const lista = (c.candidatos && c.candidatos.length)
+      ? c.candidatos.map(id => getMedico(id)).filter(Boolean)
+      : medicos;
+    const opciones = `<option value="">— elegir médico —</option>` +
+      lista.map(m => `<option value="${numId(m.id)}">${escHTML(m.sigla)} — ${escHTML(m.nombre)}</option>`).join("");
+    return `<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:5px 0;border-top:1px solid #fde68a">
+      <span style="font-size:0.76rem;color:#78350f;min-width:170px">
+        Día <b>${c.dia}</b> · «${escHTML(c.txt)}»
+        <span style="color:#92400e;opacity:.8">(${escHTML(c.motivo)})</span>
+      </span>
+      ${prop ? `<button class="btn btn-primary btn-sm" onclick="protoAsignarCaso(${numId(i)},${numId(prop.id)})">✓ Es ${escHTML(prop.nombre)}</button>` : ""}
+      <select id="proto-sel-${numId(i)}" class="filtro-select" style="max-width:210px">${opciones}</select>
+      <button class="btn btn-secondary btn-sm" onclick="protoAsignarDeSelect(${numId(i)})">Asignar</button>
+      <button class="btn btn-secondary btn-sm" onclick="protoDescartarCaso(${numId(i)})" title="Dejarlo como turno pendiente">Dejar pendiente</button>
+    </div>`;
+  }).join("");
+  return `<div style="margin-top:8px">${filas}${casos.length > TOPE
+    ? `<div style="font-size:0.72rem;color:#92400e;padding-top:5px">… y ${casos.length - TOPE} más. Se completan de a ${TOPE}.</div>` : ""}</div>`;
 }
 
 // ─── GESTOR DE AUSENCIAS Y SOLICITUDES ───────────────────────
