@@ -323,7 +323,7 @@ let state = {
   ausDetalleFecha: null,  // detalle de ausencias de un día
   ausForm: { medicoId:"", tipo:"licencia", fDesde:"", fHasta:"", motivo:"" },
   nuevoMedico: { nombre:"", sigla:"", color:"#1d4ed8" },
-  config: null,           // configuración del servicio (se carga en initPatronDefault)
+  config: null,           // configuración del servicio (se carga en iniciarApp)
   modalPDF: null,         // opciones de exportación de PDF elegidas en el modal
   statsPeriodo: null,     // período elegido en la pestaña Estadísticas
   statsGrafica: false,    // gráfica de barras desplegada en Estadísticas
@@ -372,35 +372,250 @@ function guardarNotasMes(texto) {
 }
 
 // ─── PERSISTENCIA GLOBAL (CAMBIO 1) ──────────────────────────
-function calKey(anio, mes) { return `guardias_cal_${anio}_${mes+1}`; }
+function calKey(anio, mes) { return `guardias_cal_${mesSufijo(anio, mes)}`; }
 
-/* Devuelve true sólo si de verdad se escribió. El catch estaba vacío y el toast vivía
-   AFUERA del try: con el almacenamiento lleno, la app decía "✅ Cambio guardado" sobre un
-   mes que sólo existía en memoria y se perdía al cerrar la pestaña. Aplicar prototipos
-   reescribe hasta 31 días de una, así que es el camino donde más caro sale. */
-function guardarEstado() {
-  if (state.compartido) return true;   // link compartido: nunca se escribe en el navegador de quien lo abre
-  try {
-    if (state.calendario) {
-      localStorage.setItem(calKey(state.anio, state.mes), JSON.stringify(state.calendario));
+// ─── INTEGRIDAD DEL MES ──────────────────────────────────────
+/* Un calendario es un objeto { "AAAA-MM-DD": {asignaciones, notas} } que se guarda bajo la
+   clave de UN mes. Nada en el formato impide escribir el calendario de agosto bajo la clave
+   de noviembre: las fechas viven ADENTRO del valor y la clave de afuera no las mira. Así se
+   perdió noviembre 2026 — "Hoy" cambiaba el mes mostrado sin cargar el mes, y el primer
+   guardado escribía el calendario anterior encima del mes nuevo, que después se dibuja
+   entero vacío porque ninguna de sus fechas coincide.
+   Todo lo de acá abajo existe para que eso no pueda repetirse: una sola puerta de escritura
+   que compara las fechas de adentro con el mes de la clave antes de escribir. */
+
+function mesSufijo(anio, mes) { return `${anio}_${mes + 1}`; }
+function prefijoISOMes(anio, mes) { return `${anio}-${String(mes + 1).padStart(2, "0")}`; }
+function etiquetaMes(anio, mes) { return `${MESES[mes]} ${anio}`; }
+// Nombre legible de un prefijo "AAAA-MM", para poder decir de qué mes eran los días ajenos.
+function etiquetaPrefijo(p) {
+  const t = String(p).split("-");
+  const y = Number(t[0]), m = Number(t[1]);
+  return (y && m >= 1 && m <= 12) ? `${MESES[m - 1]} ${y}` : String(p);
+}
+// Fechas del calendario que NO pertenecen al mes indicado.
+function clavesAjenas(cal, anio, mes) {
+  const p = prefijoISOMes(anio, mes) + "-";
+  return Object.keys(cal || {}).filter(f => String(f).slice(0, p.length) !== p);
+}
+function calEsDelMes(cal, anio, mes) { return !!cal && !clavesAjenas(cal, anio, mes).length; }
+/* Días con cobertura REAL: los turnos pendientes no cuentan. Es la medida que se usa para no
+   dejar que un mes cargado sea reemplazado por uno en blanco — y tiene que ser ésta y no
+   "días con asignaciones", porque un mes recién generado desde la configuración viene con
+   TODOS los días llenos de ⚠️ Pendiente: contando asignaciones, pisar noviembre con un mes
+   en blanco pre-llenado no dispararía ninguna alarma. */
+function diasConGuardias(cal) {
+  return Object.keys(cal || {}).filter(f => ((cal[f] || {}).asignaciones || []).some(a => !esPendiente(a))).length;
+}
+// Agrupa las fechas ajenas por mes de origen: { "2027-04": 30 }
+function agruparAjenas(claves) {
+  /* Object.create(null) y no `{}`: la clave viene de los datos (una fecha guardada), y sobre un
+     literal una clave `__proto__` no crea propiedad —el setter descarta en silencio lo que no es
+     un objeto—, así que ese grupo no aparecería en el aviso y diríamos que quitamos menos días
+     de los que quitamos. */
+  const g = Object.create(null);
+  (claves || []).forEach(f => { const p = String(f).slice(0, 7); g[p] = (g[p] || 0) + 1; });
+  return g;
+}
+function detalleAjenas(grupos) {
+  return Object.keys(grupos || {}).sort()
+    .map(p => `${grupos[p]} día${grupos[p] !== 1 ? "s" : ""} de ${etiquetaPrefijo(p)}`).join(", ");
+}
+
+/* Lectura cruda que distingue los tres estados. Antes `cargarCalMes` devolvía null tanto
+   cuando el mes no existía como cuando el JSON estaba roto, y "no existe" lleva al modal de
+   "generá el mes de nuevo", que escribe encima del texto dañado — justo el que todavía podía
+   leerse a mano. Son dos situaciones distintas y hay que poder diferenciarlas. */
+function leerCalClave(clave) {
+  let raw;
+  try { raw = localStorage.getItem(clave); }
+  catch (e) { return { estado: "error", motivo: "el navegador no deja leer el almacenamiento" }; }
+  if (raw == null || raw === "") return { estado: "vacio" };
+  let o;
+  try { o = JSON.parse(raw); }
+  catch (e) { return { estado: "danado", motivo: "el texto guardado no es JSON válido", crudo: raw }; }
+  if (!o || typeof o !== "object" || Array.isArray(o)) return { estado: "danado", motivo: "lo guardado no es un objeto de días", crudo: raw };
+  if (!Object.keys(o).length) return { estado: "vacio" };
+  return { estado: "ok", cal: o };
+}
+function leerCalMes(anio, mes) { return leerCalClave(calKey(anio, mes)); }
+// Compatibilidad: los lectores de siempre (estadísticas, PDF, patrón) siguen pidiendo
+// "el calendario o nada". Un mes dañado se comporta como vacío PARA LEER, nunca para escribir.
+function cargarCalMes(anio, mes) {
+  const r = leerCalMes(anio, mes);
+  return r.estado === "ok" ? r.cal : null;
+}
+// El texto ilegible se aparta en su propia clave antes de reemplazarlo: ocupa lugar, pero es
+// la diferencia entre "se puede recuperar a mano" y "no existe más".
+function apartarRoto(clave, crudo) {
+  if (crudo == null || String(crudo).length > 200000) return false;
+  try { localStorage.setItem(clave + "__roto", String(crudo)); return true; } catch (e) { return false; }
+}
+
+// ─── COPIAS AUTOMÁTICAS (INSTANTÁNEAS) ───────────────────────
+/* Seis por mes. Un mes cargado pesa del orden de 10 kB, así que seis copias son ~60 kB y los
+   doce meses del año entran de sobra en los ~5 MB de localStorage. Con menos de seis, una
+   seguidilla de acciones riesgosas (aplicar prototipo, corregir, volver a aplicar) tapa la
+   copia buena antes de que te des cuenta de que la necesitabas. */
+const SNAP_MAX = 6;
+function snapKey(anio, mes) { return `guardias_snap_${mesSufijo(anio, mes)}`; }
+function snapLista(anio, mes) {
+  try { const a = JSON.parse(localStorage.getItem(snapKey(anio, mes))); return Array.isArray(a) ? a : []; }
+  catch (e) { return []; }
+}
+function snapGuardar(anio, mes, cal, motivo) {
+  if (state.compartido) return false;
+  if (!cal || !Object.keys(cal).length) return false;
+  const arr = snapLista(anio, mes);
+  arr.push({ ts: Date.now(), motivo: String(motivo || ""), dias: diasConGuardias(cal), cal: JSON.parse(JSON.stringify(cal)) });
+  while (arr.length > SNAP_MAX) arr.shift();
+  /* Si el almacenamiento está lleno se van soltando las copias más viejas antes de rendirse:
+     una copia menos es mejor que ninguna. */
+  while (arr.length) {
+    try { localStorage.setItem(snapKey(anio, mes), JSON.stringify(arr)); return true; }
+    catch (e) { arr.shift(); }
+  }
+  return false;
+}
+/* Copia del mes que está en pantalla, justo antes de una acción que lo reescribe. Si la copia
+   no se puede guardar, se pregunta: la red de contención es el motivo por el que la acción es
+   aceptable, así que perderla cambia la decisión. */
+function snapAntesDe(motivo) {
+  if (state.compartido) return true;
+  if (!state.calendario || !diasConGuardias(state.calendario)) return true;   // nada que respaldar
+  if (snapGuardar(state.anio, state.mes, state.calendario, motivo)) return true;
+  return confirm("⚠️ No se pudo guardar la copia de seguridad de " + etiquetaMes(state.anio, state.mes) +
+    " (almacenamiento lleno).\n\nSi seguís, este cambio NO se va a poder deshacer.\n\n¿Seguir igual?");
+}
+
+// ─── LA ÚNICA PUERTA DE ESCRITURA DE UN MES ──────────────────
+/* Tres reglas, siempre, para cualquier camino:
+   1. el calendario tiene que ser del mes de destino (si no, no se escribe NADA);
+   2. un mes con guardias cargadas no se reemplaza por uno sin ninguna sin confirmar;
+   3. no se escribe encima de un texto dañado sin decirlo.
+   Devuelve true sólo si de verdad se escribió. */
+function escribirCal(anio, mes, cal, opts) {
+  opts = opts || {};
+  const clave = opts.clave || calKey(anio, mes);
+  const et = etiquetaMes(anio, mes);
+
+  const ajenas = clavesAjenas(cal, anio, mes);
+  if (ajenas.length) {
+    alert("⚠️ NO SE GUARDÓ NADA.\n\nEl calendario que está en memoria tiene " + ajenas.length +
+      " día(s) que no son de " + et + " (" + detalleAjenas(agruparAjenas(ajenas)) + ").\n\n" +
+      "Guardarlo así reemplazaría " + et + " por otro mes. Cambiá de mes con las flechas ‹ › y volvé a entrar: " +
+      "el mes se recarga del disco y no se pierde nada.");
+    return false;
+  }
+
+  const antes = leerCalClave(clave);
+  if (antes.estado === "danado" && !opts.permitirPisarRoto) {
+    const apartado = apartarRoto(clave, antes.crudo);
+    if (!confirm("⚠️ Lo que está guardado de " + et + " está ilegible (" + antes.motivo + ").\n\n" +
+      (apartado ? "El texto original se apartó en una clave aparte por si hay que leerlo a mano.\n\n" : "") +
+      "¿Reemplazarlo por lo que hay ahora en pantalla?")) return false;
+  }
+  if (!opts.permitirVaciar && antes.estado === "ok") {
+    const nAntes = diasConGuardias(antes.cal), nAhora = diasConGuardias(cal);
+    if (nAntes > 0 && nAhora === 0) {
+      if (!confirm("⚠️ " + et + " tiene " + nAntes + " día(s) con guardias cargadas y lo que se va a guardar no tiene ninguna.\n\n" +
+        "¿Reemplazarlo igual?")) return false;
     }
-    localStorage.setItem("guardias_medicos", JSON.stringify(medicos));
-  } catch(e) {
-    console.error("[guardarEstado] no se pudo persistir", e);
-    alert("⚠️ No se pudo guardar en este navegador (almacenamiento lleno).\n\nLos cambios están en pantalla pero SE PIERDEN al cerrar la pestaña. Exportá el mes o liberá espacio antes de seguir.");
+  }
+
+  try { localStorage.setItem(clave, JSON.stringify(cal)); }
+  catch (e) {
+    console.error("[escribirCal] no se pudo persistir", e);
+    alert("⚠️ No se pudo guardar en este navegador (almacenamiento lleno).\n\n" +
+      "Los cambios están en pantalla pero SE PIERDEN al cerrar la pestaña. Exportá el mes o liberá espacio antes de seguir.");
+    return false;
+  }
+  return true;
+}
+
+/* Único camino para ABRIR un mes (al arrancar y al navegar). Lee, separa "no existe" de
+   "está dañado", y si encuentra fechas de otro mes mezcladas hace una copia y las quita.
+   La limpieza es necesaria porque el bug de "Hoy" ya dejó meses con dos juegos de fechas
+   adentro: los 30 días correctos y los 30 de otro mes que se escribieron encima. */
+function abrirMes(anio, mes) {
+  const r = leerCalMes(anio, mes);
+  if (r.estado === "error" || r.estado === "danado") return { estado: r.estado, motivo: r.motivo };
+  if (r.estado === "vacio") return { estado: "vacio" };
+
+  const ajenas = clavesAjenas(r.cal, anio, mes);
+  if (!ajenas.length) return { estado: "ok", cal: r.cal };
+
+  // Copia PRIMERO, con todo adentro: si la copia no se puede guardar, no se limpia nada.
+  const copia = snapGuardar(anio, mes, r.cal, "antes de quitar días de otro mes");
+  if (!copia) {
+    return { estado: "ok", cal: r.cal, sinCopia: true, grupos: agruparAjenas(ajenas), limpiadas: 0 };
+  }
+  const grupos = agruparAjenas(ajenas);
+  ajenas.forEach(k => { delete r.cal[k]; });
+
+  // Si al quitar las ajenas no queda ningún día del mes, el blob entero era de otro mes: se
+  // borra la clave para que el mes vuelva a ofrecer "generarlo de nuevo" en vez de dibujarse
+  // vacío para siempre. Lo que había sigue en la copia.
+  if (!Object.keys(r.cal).length) {
+    try { localStorage.removeItem(calKey(anio, mes)); } catch (e) {}
+    return { estado: "vacio", limpiadas: ajenas.length, grupos: grupos, todoAjeno: true, copia: true };
+  }
+  escribirCal(anio, mes, r.cal, { permitirVaciar: true, permitirPisarRoto: true });
+  return { estado: "ok", cal: r.cal, limpiadas: ajenas.length, grupos: grupos, copia: true };
+}
+
+// Aviso de la limpieza, una sola vez por apertura y sólo si hubo algo que limpiar.
+function avisarApertura(anio, mes, r) {
+  const et = etiquetaMes(anio, mes);
+  if (r.sinCopia) {
+    alert("⚠️ " + et + " tiene " + detalleAjenas(r.grupos) + " mezclados con los días del mes.\n\n" +
+      "NO se limpiaron porque no se pudo guardar la copia de seguridad (almacenamiento lleno). " +
+      "Exportá el mes o liberá espacio y volvé a entrar.");
+    return;
+  }
+  if (!r.limpiadas) return;
+  if (r.todoAjeno) {
+    alert("🧹 " + et + " estaba ocupado por otro mes.\n\n" +
+      "Los " + r.limpiadas + " día(s) que había (" + detalleAjenas(r.grupos) + ") no son de " + et + ", " +
+      "así que se guardaron en una copia y se quitaron. El mes queda para generar de nuevo.\n\n" +
+      "La copia está en ≡ → 🕑 Restaurar versión anterior.");
+    return;
+  }
+  alert("🧹 " + et + " tenía " + detalleAjenas(r.grupos) + " mezclados con los días del mes.\n\n" +
+    "Se quitaron " + r.limpiadas + " día(s) ajenos y se dejaron intactos los " + Object.keys(r.cal).length +
+    " días de " + et + ".\n\nAntes de tocar nada se guardó una copia completa: ≡ → 🕑 Restaurar versión anterior.");
+}
+
+/* Guarda antes de escribir días en el calendario en memoria (aplicar plantilla, prototipos).
+   Es el mismo control que hace `escribirCal`, pero adelantado: así la acción no llega a mutar
+   el objeto equivocado y después no poder guardarlo. */
+function mesEnMemoriaOk(accion) {
+  if (!state.calendario) return true;
+  const ajenas = clavesAjenas(state.calendario, state.anio, state.mes);
+  if (!ajenas.length) return true;
+  alert("⚠️ " + accion + ": cancelado.\n\nEl calendario que está en memoria no es el de " +
+    etiquetaMes(state.anio, state.mes) + ": tiene " + detalleAjenas(agruparAjenas(ajenas)) + ".\n\n" +
+    "Cambiá de mes con las flechas ‹ › y volvé a entrar antes de seguir.");
+  return false;
+}
+
+/* Devuelve true sólo si de verdad se escribió: el catch estaba vacío y el toast vivía AFUERA
+   del try, así que con el almacenamiento lleno la app decía "✅ Cambio guardado" sobre un mes
+   que sólo existía en memoria y se perdía al cerrar la pestaña. Toda la validación vive en
+   escribirCal(), que es la única puerta de escritura de un mes. */
+function guardarEstado(opts) {
+  if (state.compartido) return true;   // link compartido: nunca se escribe en el navegador de quien lo abre
+  if (state.calendario) {
+    if (!escribirCal(state.anio, state.mes, state.calendario, opts)) return false;
+  }
+  try { localStorage.setItem("guardias_medicos", JSON.stringify(medicos)); }
+  catch (e) {
+    console.error("[guardarEstado] no se pudo persistir el equipo", e);
+    alert("⚠️ No se pudo guardar el equipo en este navegador (almacenamiento lleno).");
     return false;
   }
   toastGuardado();
   return true;
-}
-
-function cargarCalMes(anio, mes) {
-  try {
-    const raw = localStorage.getItem(calKey(anio, mes));
-    if (!raw) return null;
-    const obj = JSON.parse(raw);
-    return (obj && typeof obj === "object") ? obj : null;
-  } catch(e) { return null; }
 }
 
 function cargarEstado() {
@@ -410,12 +625,23 @@ function cargarEstado() {
       const arr = JSON.parse(rawMed);
       if (Array.isArray(arr) && arr.length) medicos = arr;
     }
-    const cal = cargarCalMes(state.anio, state.mes);
-    if (cal) {
-      state.calendario = cal;
-      state.historialMeses[`${state.anio}-${state.mes}`] = cal;
-    }
   } catch(e) {}
+  /* El mes se abre por abrirMes(), que distingue "no hay nada guardado" de "lo guardado está
+     roto" y limpia las fechas de otro mes que el bug de "Hoy" pudo dejar mezcladas. Antes un
+     JSON dañado dejaba en memoria el mes por defecto SIN avisar, y el primer guardado lo
+     escribía encima del texto que todavía se podía leer a mano. */
+  const r = abrirMes(state.anio, state.mes);
+  avisarApertura(state.anio, state.mes, r);
+  if (r.estado === "ok") {
+    state.calendario = r.cal;
+    state.historialMeses[`${state.anio}-${state.mes}`] = r.cal;
+    return;
+  }
+  if (r.estado === "danado" || r.estado === "error") {
+    alert("⚠️ " + etiquetaMes(state.anio, state.mes) + " está guardado pero no se puede leer (" + r.motivo + ").\n\n" +
+      "No se va a escribir nada encima. Lo que se ve en pantalla NO son tus guardias de ese mes: " +
+      "exportá un respaldo de los demás meses antes de seguir tocando la app.");
+  }
 }
 
 function generarMesVacio(anio, mes) {
@@ -659,9 +885,24 @@ function borrarGhToken() {
   try { localStorage.removeItem(GH_TOKEN_KEY); } catch (e) {}
   render();
 }
-function gistKeyMes(anio, mes) { return `guardias_gist_${anio}_${mes}`; }
+/* Misma base que calKey (mes+1). La clave vieja usaba el mes base 0, así que para el mismo
+   noviembre convivían guardias_cal_2026_11 y guardias_gist_2026_10: dos esquemas en la misma
+   app es una trampa para el próximo que toque estas claves. La vieja se lee como respaldo y se
+   migra al leerla, por mes, sin flags globales. */
+function gistKeyMes(anio, mes) { return `guardias_gistid_${mesSufijo(anio, mes)}`; }
+function gistKeyMesVieja(anio, mes) { return `guardias_gist_${anio}_${mes}`; }
 function gistIdGuardado() {
-  try { return localStorage.getItem(gistKeyMes(state.anio, state.mes)) || ""; } catch (e) { return ""; }
+  try {
+    const nueva = localStorage.getItem(gistKeyMes(state.anio, state.mes));
+    if (nueva) return nueva;
+    const vieja = localStorage.getItem(gistKeyMesVieja(state.anio, state.mes));
+    if (vieja) {
+      localStorage.setItem(gistKeyMes(state.anio, state.mes), vieja);
+      localStorage.removeItem(gistKeyMesVieja(state.anio, state.mes));
+      return vieja;
+    }
+    return "";
+  } catch (e) { return ""; }
 }
 function nombreArchivoGist() { return `guardiasync_${state.mes + 1}_${state.anio}.json`; }
 
@@ -1837,8 +2078,12 @@ function guardarPlantilla() {
 function aplicarPlantilla() {
   let tpl; try { tpl = JSON.parse(localStorage.getItem("guardias_plantilla")); } catch(e) {}
   if (!tpl || !Object.keys(tpl).length) { alert("No hay ninguna plantilla guardada todavía."); return; }
+  // Escribe días construidos con state.anio/state.mes dentro de state.calendario: si el
+  // calendario en memoria es de otro mes, mezcla dos meses en el mismo objeto.
+  if (!mesEnMemoriaOk("Aplicar plantilla")) return;
   const tieneDatos = Object.values(state.calendario || {}).some(d => d.asignaciones && d.asignaciones.length);
   if (tieneDatos && !confirm("Este mes ya tiene guardias cargadas. ¿Aplicar la plantilla igual? (sobrescribe los días incluidos en la plantilla)")) return;
+  if (!snapAntesDe("antes de aplicar la plantilla")) return;
   const total = new Date(state.anio, state.mes + 1, 0).getDate();
   let aplicados = 0;
   Object.keys(tpl).forEach(dn => {
@@ -2257,6 +2502,10 @@ function protoAplicarAlMes() {
   // acá en vez de reescribir 31 días que sólo van a existir en memoria.
   if (!protoGuardar(p)) return;
   if (!protoTieneAlgo(p)) { alert("No hay nada escrito en ninguna de las tres pestañas."); return; }
+  // Reescribe hasta 31 días a partir de state.anio/state.mes: si el calendario en memoria es
+  // de otro mes, el prototipo se escribiría dentro del objeto equivocado.
+  if (!mesEnMemoriaOk("Aplicar prototipos")) return;
+  if (!snapAntesDe("antes de aplicar prototipos")) return;
   // Se simula primero sobre una copia para poder avisar ANTES de tocar el calendario.
   const respaldo = JSON.parse(JSON.stringify(state.calendario || {}));
   /* Vaciar es lo único que destruye datos que el prototipo después NO vuelve a escribir,
@@ -2305,6 +2554,7 @@ function protoLimpiarModos() {
    tres capas. Sólo aparece si hay algo escrito en algún prototipo. */
 function aplicarCopiaProto() {
   aplicarCopia(false);
+  if (!mesEnMemoriaOk("Aplicar prototipos")) return;
   const p = protoCargar();
   const r = protoAplicar(p);
   state.protoResumen = r;
@@ -2655,11 +2905,25 @@ function borrarAusencia(id) {
 }
 
 function irHoy() {
-  protoLimpiarRevision();
   const hoy = new Date();
-  state.mes = hoy.getMonth();
-  state.anio = hoy.getFullYear();
-  render();
+  const y = hoy.getFullYear(), m = hoy.getMonth();
+  const iso = `${y}-${String(m + 1).padStart(2, "0")}-${String(hoy.getDate()).padStart(2, "0")}`;
+  /* Esto escribía state.anio/state.mes y renderizaba, sin cargar el mes nuevo ni guardar el
+     que dejaba: el mes se dibujaba con el calendario del anterior —ninguna fecha coincide, así
+     que salían los 30 días "Sin cubrir"— y el primer guardado lo escribía encima. Era la causa
+     de que noviembre 2026 apareciera vacío. Ahora pasa por irAMes, que guarda y carga. */
+  if (y === state.anio && m === state.mes) {
+    if (state.modoCal === "semana") state.semanaAncla = iso;
+    render();
+    return;
+  }
+  irAMes(y, m);
+  // Si irAMes no llegó a navegar (mes dañado, o el modal de "generar el mes"), la semana no se
+  // mueve: quedaría mostrando una semana de un mes que no está cargado.
+  if (state.anio === y && state.mes === m && state.modoCal === "semana") {
+    state.semanaAncla = iso;
+    render();
+  }
 }
 
 function prevMes() {
@@ -2681,27 +2945,47 @@ function protoLimpiarRevision() { state.protoResumen = null; state.protoConflict
 
 function irAMes(anioNuevo, mesNuevo) {
   protoLimpiarRevision();
-  // Guardar mes actual (memoria + localStorage)
-  state.historialMeses[`${state.anio}-${state.mes}`] = state.calendario;
-  guardarEstado();
+  /* 1. El mes que se deja. Se guarda SÓLO si el calendario en memoria pertenece a ese mes: si
+     no, se descarta en vez de escribirlo. El disco manda, porque lo que hay en memoria en ese
+     caso es el calendario de otro mes y guardarlo es exactamente lo que destruía el mes. */
+  if (state.calendario && !calEsDelMes(state.calendario, state.anio, state.mes)) {
+    const aj = clavesAjenas(state.calendario, state.anio, state.mes);
+    alert("⚠️ " + etiquetaMes(state.anio, state.mes) + " NO se guardó.\n\nEl calendario que había en memoria tiene " +
+      detalleAjenas(agruparAjenas(aj)) + ", así que no es el de ese mes. Se descarta y se vuelve a leer del disco: " +
+      "no se perdió nada de lo que estaba guardado.");
+    delete state.historialMeses[`${state.anio}-${state.mes}`];
+  } else {
+    state.historialMeses[`${state.anio}-${state.mes}`] = state.calendario;
+    if (!guardarEstado()) return;   // almacenamiento lleno o reemplazo rechazado: no se navega
+  }
 
   const clave = `${anioNuevo}-${mesNuevo}`;
-  const calGuardado = cargarCalMes(anioNuevo, mesNuevo);
-  if(calGuardado) {
-    state.calendario = calGuardado;
-    state.historialMeses[clave] = calGuardado;
+  const r = abrirMes(anioNuevo, mesNuevo);
+  avisarApertura(anioNuevo, mesNuevo, r);
+  if (r.estado === "danado" || r.estado === "error") {
+    alert("⚠️ " + etiquetaMes(anioNuevo, mesNuevo) + " está guardado pero no se puede leer (" + r.motivo + ").\n\n" +
+      "No se abre y no se escribe nada encima, para no tapar lo que todavía pueda rescatarse de ahí.");
+    render();
+    return;
+  }
+  if (r.estado === "ok") {
+    state.calendario = r.cal;
+    state.historialMeses[clave] = r.cal;
     state.anio = anioNuevo;
     state.mes = mesNuevo;
     render();
-  } else if(state.historialMeses[clave]) {
+    return;
+  }
+  // Vacío: lo que haya en memoria de ese mes y, si no hay nada, el modal para construirlo.
+  if (state.historialMeses[clave] && Object.keys(state.historialMeses[clave]).length) {
     state.calendario = state.historialMeses[clave];
     state.anio = anioNuevo;
     state.mes = mesNuevo;
     render();
-  } else {
-    state.modalCopiar = { anioNuevo, mesNuevo, anioOrigen:state.anio, mesOrigen:state.mes };
-    render();
+    return;
   }
+  state.modalCopiar = { anioNuevo, mesNuevo, anioOrigen:state.anio, mesOrigen:state.mes };
+  render();
 }
 
 // Cerrar el modal de cambio de mes sin elegir nada: se queda en el mes que ya estaba en pantalla.
@@ -2720,6 +3004,7 @@ function cancelarCopiaMes() {
 
 function aplicarCopia(copiar) {
   const {anioNuevo, mesNuevo, anioOrigen, mesOrigen} = state.modalCopiar;
+  const rehacer = !!state.modalCopiar.rehacer;
 
   // CAMBIO 4: se copia POR DÍA DE SEMANA usando el calendario REAL del mes anterior
   // (no posición a posición, y no el patrón hardcodeado): todos los lunes del mes nuevo
@@ -2729,12 +3014,25 @@ function aplicarCopia(copiar) {
     ? aplicarPatronDesdeCal(anioNuevo, mesNuevo, calOrigen)
     : generarMesDesdeConfig(anioNuevo, mesNuevo);   // pre-llenado con los turnos de la config, como ⚠️ Pendiente
 
+  /* Rehacer el mes es el único camino que escribe encima de un mes que puede tener guardias
+     cargadas, así que la copia se hace acá: cuando ya se eligió con qué reemplazarlo. */
+  if (rehacer) {
+    const actual = calDelMes(anioNuevo, mesNuevo);
+    if (diasConGuardias(actual) && !snapGuardar(anioNuevo, mesNuevo, actual, "antes de rehacer el mes")) {
+      if (!confirm("⚠️ No se pudo guardar la copia de seguridad de " + etiquetaMes(anioNuevo, mesNuevo) +
+          " (almacenamiento lleno).\n\n¿Rehacer el mes igual? No se va a poder deshacer.")) {
+        state.modalCopiar = null; render(); return;
+      }
+    }
+  }
+
   state.calendario = calNuevo;
   state.historialMeses[`${anioNuevo}-${mesNuevo}`] = calNuevo;
   state.anio = anioNuevo;
   state.mes = mesNuevo;
   state.modalCopiar = null;
-  guardarEstado();
+  // Rehacer ya preguntó y ya hizo la copia: no se vuelve a preguntar por el reemplazo.
+  guardarEstado({ permitirVaciar: rehacer });
   render();
 }
 
@@ -2743,18 +3041,18 @@ function aplicarCopia(copiar) {
 // como irAMes() carga lo que haya en localStorage, un mes ya guardado nunca vuelve
 // a mostrar el modal de "usar el mes anterior como base".
 function rehacerMesDesdePatron() {
-  const etiqueta = `${MESES[state.mes]} ${state.anio}`;
-  if (!confirm(`¿Borrar las guardias guardadas de ${etiqueta} y regenerarlo a partir del mes anterior?\n\nEsto descarta los cambios hechos a mano en ${etiqueta}. Las ausencias y el historial no se tocan.`)) return;
+  const etiqueta = etiquetaMes(state.anio, state.mes);
+  if (!mesEnMemoriaOk("Rehacer " + etiqueta)) return;
+  if (!confirm(`¿Borrar las guardias guardadas de ${etiqueta} y regenerarlo a partir del mes anterior?\n\nEsto descarta los cambios hechos a mano en ${etiqueta}. Las ausencias y el historial no se tocan.\n\nAntes de reemplazarlo se guarda una copia, recuperable desde ≡ → 🕑 Restaurar versión anterior.`)) return;
 
   // Mes anterior (origen del patrón)
   const anioOrigen = state.mes === 0 ? state.anio - 1 : state.anio;
   const mesOrigen  = state.mes === 0 ? 11 : state.mes - 1;
 
-  try { localStorage.removeItem(calKey(state.anio, state.mes)); } catch (e) {}
-  delete state.historialMeses[`${state.anio}-${state.mes}`];
-
-  // Reusa exactamente el mismo camino que el modal de cambio de mes.
-  state.modalCopiar = { anioNuevo: state.anio, mesNuevo: state.mes, anioOrigen, mesOrigen };
+  /* El mes NO se borra acá. Antes se hacía `removeItem` ANTES de preguntar con qué reemplazarlo:
+     si cerrabas la pestaña o recargabas con el modal abierto, el mes ya no existía y no había
+     nada que lo reemplazara. Ahora lo reemplaza aplicarCopia(), cuando ya elegiste. */
+  state.modalCopiar = { anioNuevo: state.anio, mesNuevo: state.mes, anioOrigen, mesOrigen, rehacer: true };
   render();
 }
 
@@ -3711,10 +4009,20 @@ function moverSemana(dir) {
   const _anc = anclaSemana(); const [_ms_y,_ms_m,_ms_d] = _anc.split("-").map(Number);
   const d = new Date(_ms_y, _ms_m-1, _ms_d);
   d.setDate(d.getDate() + dir * 7);
-  state.semanaAncla = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  // sincronizar mes/año mostrados con la semana
-  state.anio = d.getFullYear(); state.mes = d.getMonth();
-  cargarEstado();
+  const nueva = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  /* Cruzar de mes va por irAMes, el único camino que guarda el mes que deja y carga el que
+     abre. Antes esto llamaba a cargarEstado(), que cuando el mes destino no tenía nada guardado
+     dejaba el calendario del mes anterior en memoria SIN decir nada: al volver a vista mensual
+     se veía el mes nuevo vacío y el siguiente guardado lo escribía encima. */
+  if (d.getFullYear() !== state.anio || d.getMonth() !== state.mes) {
+    irAMes(d.getFullYear(), d.getMonth());
+    if (state.anio === d.getFullYear() && state.mes === d.getMonth()) {
+      state.semanaAncla = nueva;
+      render();
+    }
+    return;
+  }
+  state.semanaAncla = nueva;
   render();
 }
 function navPrev() { state.modoCal === "semana" ? moverSemana(-1) : prevMes(); }
@@ -4849,20 +5157,12 @@ function importarMesJSON(ev) {
 }
 
 // ─── LOGIN + INIT (CAMBIO 4) ─────────────────────────────────
-function initPatronDefault() {
-  state.config = cargarConfig();   // configuración del servicio
-  // Guardar la plantilla por defecto (patrón semanal) en localStorage
-  try { localStorage.setItem("guardias_plantilla_default", JSON.stringify(PATRON_SEMANAL)); } catch(e) {}
-  // Fix único: limpiar agosto 2026 y reemplazar por el patrón correcto
-  try {
-    if (localStorage.getItem("guardias_patron_aug2026_v1") !== "1") {
-      localStorage.setItem(calKey(2026, 7), JSON.stringify(aplicarPatronMes(2026, 7)));
-      localStorage.setItem("guardias_patron_aug2026_v1", "1");
-    }
-  } catch(e) {}
-}
 function iniciarApp() {
-  initPatronDefault();
+  /* Acá vivía initPatronDefault(), que al primer arranque de la versión reescribía
+     guardias_cal_2026_8 con el patrón por defecto, sin preguntar. El arreglo ya está consumido
+     (tenía su flag) y lo único que podía seguir haciendo era borrar agosto de nuevo si alguien
+     limpiaba esa marca. También escribía guardias_plantilla_default, que no se lee en ninguna parte. */
+  state.config = cargarConfig();
   cargarEstado();
   render();
 }
