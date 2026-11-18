@@ -2827,12 +2827,13 @@ function renderModalHist() {
 // involucrado), así que se toma solo el lado que contiene el día contrario.
 // Quita el emoji inicial del texto de historial para las tablas del PDF.
 function limpiarEmoji(t) { return String(t || "").replace(/^[^A-Za-zÁÉÍÓÚÑáéíóúñ0-9]+/, "").trim(); }
-function eventosIntercambioMes() {
-  const total = new Date(state.anio, state.mes + 1, 0).getDate();
+/* Intercambios y movimientos de un tramo de días de un mes. eventosIntercambioMes()
+   queda como el caso particular del mes en pantalla, que es lo que usa la UI. */
+function eventosIntercambioDias(anio, mes, dIni, dFin) {
   const eventos = [];
   const vistos = new Set();
-  for (let d = 1; d <= total; d++) {
-    const fecha = fechaDeDia(d);
+  for (let d = dIni; d <= dFin; d++) {
+    const fecha = anio + "-" + String(mes + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0");
     histGet(fecha).forEach(h => {
       const t = String(h.texto || "");
 
@@ -2853,7 +2854,6 @@ function eventosIntercambioMes() {
         const otro = mDia ? Number(mDia[1]) : null;
         const idx = t.indexOf(":");
         const medicos = idx >= 0 ? t.slice(idx + 1).trim() : "Día completo (todas las asignaciones)";
-        // Clave estable para no listar dos veces la misma operación.
         const par = otro ? [d, otro].sort((a, b) => a - b) : [d];
         const clave = `I|${par.join("-")}|${medicos}|${Math.round((h.ts || 0) / 1000)}`;
         if (vistos.has(clave)) return;
@@ -2870,6 +2870,9 @@ function eventosIntercambioMes() {
     });
   }
   return eventos.sort((a, b) => (b.orden - a.orden) || (b.ts - a.ts));   // fecha descendente
+}
+function eventosIntercambioMes() {
+  return eventosIntercambioDias(state.anio, state.mes, 1, new Date(state.anio, state.mes + 1, 0).getDate());
 }
 
 function renderModalAusencias() {
@@ -3471,10 +3474,270 @@ function quitarMedico(id) {
   render();
 }
 
+/* El logo termina dentro de un src=, y ahí escapar NO alcanza: un "https://..." guardado
+   en el almacenamiento es HTML perfectamente válido y le avisa a un servidor de afuera
+   cada vez que alguien abre el informe. Sube siempre como imagen embebida, así que lo que
+   no empiece con data:image/ no se dibuja. Un <img> no ejecuta el script de un SVG, por eso
+   svg+xml sigue permitido: es el formato en que la app guarda los logos vectoriales. */
+function logoSeguro() {
+  const l = String(cargarLogo() || "");
+  return /^data:image\/(png|jpeg|jpg|gif|webp|svg\+xml)[;,]/i.test(l) ? l : "";
+}
+
+// ─── PDF: HELPERS DE COLOR Y GRÁFICAS INLINE ─────────────────
+/* Las gráficas se dibujan en SVG escrito a mano: la app no carga ninguna librería y no va
+   a empezar a hacerlo por un informe. Cada médico conserva el color que ya tiene en la
+   app; el tono claro son las horas de día y el oscuro las de noche, en la misma barra.
+   El tramo de noche lleva además una trama diagonal, porque impreso en blanco y negro
+   dos tonos del mismo color terminan siendo el mismo gris. */
+function pdfHexAClaro(hex, f) {
+  const h = String(hex || "#334155").replace("#", "");
+  const n = h.length === 3 ? h.split("").map(c => c + c).join("") : h;
+  const r = parseInt(n.slice(0, 2), 16), g = parseInt(n.slice(2, 4), 16), b = parseInt(n.slice(4, 6), 16);
+  if (isNaN(r) || isNaN(g) || isNaN(b)) return "#cbd5e1";
+  const m = x => Math.round(x + (255 - x) * f);
+  return "#" + [m(r), m(g), m(b)].map(x => x.toString(16).padStart(2, "0")).join("");
+}
+/* Tope "redondo" del eje: el menor valor de la forma 1/1,2/1,5/2/2,5/3/4/5/6/8 × 10^k
+   que llegue al máximo. Con potencias de 10 solas, un máximo de 108 h daba un eje hasta
+   200 y las barras se leían como la mitad de lo que son. */
+function pdfTopeEje(max) {
+  const m = Math.max(Number(max) || 0, 1e-9);
+  const esc = Math.pow(10, Math.floor(Math.log10(m)));
+  const pasos = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+  for (let i = 0; i < pasos.length; i++) {
+    if (pasos[i] * esc >= m - 1e-9) return pasos[i] * esc;
+  }
+  return 10 * esc;
+}
+
+// Escapa texto para meterlo en un nodo <text> de SVG (mismas reglas que en HTML).
+function pdfSvgTxt(s) { return escHTML(s); }
+
+/* Gráfica de horas: un grupo de barras por médico, una barra por mes dentro del grupo.
+   Devuelve "" si no hay nada que dibujar, para no imprimir un marco vacío. */
+function pdfGraficaHoras(ag) {
+  const filas = ag.filas.filter(x => x.horas > 0);
+  const meses = ag.meses.filter(m => m.hayCal);
+  if (!filas.length || !meses.length) return "";
+  const nM = meses.length;
+  const W = 1000, H = 300, padL = 44, padR = 10, padB = nM > 1 ? 44 : 30, padT = 14;
+  const anchoUtil = W - padL - padR, altoUtil = H - padT - padB;
+  const grupo = anchoUtil / filas.length;
+  const anchoBarra = Math.max(4, Math.min(26, (grupo * 0.78) / nM));
+  const maxH = Math.max.apply(null, filas.map(x => {
+    return Math.max.apply(null, meses.map(m => {
+      const c = m.porMedico[x.medico.id];
+      return c ? c.horas : 0;
+    }));
+  })) || 1;
+  const tope = pdfTopeEje(maxH);
+  const y = v => padT + altoUtil - (v / tope) * altoUtil;
+
+  let ejes = "";
+  for (let k = 0; k <= 4; k++) {
+    const v = tope * k / 4, yy = y(v);
+    ejes += '<line x1="' + padL + '" y1="' + yy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + yy.toFixed(1) +
+            '" stroke="#d1d5db" stroke-width="0.7"/>' +
+            '<text x="' + (padL - 6) + '" y="' + (yy + 3.5).toFixed(1) + '" text-anchor="end" font-size="9" fill="#6b7280">' + fmtH(v) + '</text>';
+  }
+
+  let barras = "";
+  filas.forEach((x, gi) => {
+    const x0 = padL + gi * grupo + (grupo - anchoBarra * nM) / 2;
+    meses.forEach((m, mi) => {
+      const c = m.porMedico[x.medico.id] || { horas: 0, horasDia: 0, horasNoche: 0 };
+      if (!c.horas) return;
+      const bx = x0 + mi * anchoBarra;
+      const yDia = y(c.horasDia), yTot = y(c.horas);
+      const claro = pdfHexAClaro(x.medico.color, 0.55);
+      // Día: tono claro, abajo. Noche: color pleno + trama, arriba.
+      if (c.horasDia > 0) {
+        barras += '<rect x="' + bx.toFixed(1) + '" y="' + yDia.toFixed(1) + '" width="' + (anchoBarra - 1.5).toFixed(1) +
+                  '" height="' + (padT + altoUtil - yDia).toFixed(1) + '" fill="' + claro + '" stroke="#475569" stroke-width="0.5"/>';
+      }
+      if (c.horasNoche > 0) {
+        barras += '<rect x="' + bx.toFixed(1) + '" y="' + yTot.toFixed(1) + '" width="' + (anchoBarra - 1.5).toFixed(1) +
+                  '" height="' + (yDia - yTot).toFixed(1) + '" fill="' + escAttr(x.medico.color) + '" stroke="#1e293b" stroke-width="0.6"/>' +
+                  '<rect x="' + bx.toFixed(1) + '" y="' + yTot.toFixed(1) + '" width="' + (anchoBarra - 1.5).toFixed(1) +
+                  '" height="' + (yDia - yTot).toFixed(1) + '" fill="url(#tramaNoche)" stroke="none"/>';
+      }
+      if (nM > 1) {
+        barras += '<text x="' + (bx + (anchoBarra - 1.5) / 2).toFixed(1) + '" y="' + (padT + altoUtil + 10) +
+                  '" text-anchor="middle" font-size="7" fill="#6b7280">' + pdfSvgTxt(MESES_CORTO[m.mes]) + '</text>';
+      }
+    });
+    barras += '<text x="' + (padL + gi * grupo + grupo / 2).toFixed(1) + '" y="' + (padT + altoUtil + (nM > 1 ? 24 : 13)) +
+              '" text-anchor="middle" font-size="9" font-weight="700" fill="#374151">' + pdfSvgTxt(x.medico.sigla || x.medico.nombre) + '</text>';
+    barras += '<text x="' + (padL + gi * grupo + grupo / 2).toFixed(1) + '" y="' + (padT + altoUtil + (nM > 1 ? 34 : 23)) +
+              '" text-anchor="middle" font-size="7" fill="#9ca3af">' + fmtH(x.horas) + ' h</text>';
+  });
+
+  return '<div class="graf">' +
+    '<div class="graf-tit">Horas por médico y por mes — tono claro: horas de día (08–20) · tono oscuro con trama: horas de noche (20–08)</div>' +
+    '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="' + H + '" xmlns="http://www.w3.org/2000/svg" role="img">' +
+      '<defs><pattern id="tramaNoche" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">' +
+        '<line x1="0" y1="0" x2="0" y2="5" stroke="#ffffff" stroke-width="1.4" stroke-opacity="0.85"/></pattern></defs>' +
+      '<line x1="' + padL + '" y1="' + (padT + altoUtil) + '" x2="' + (W - padR) + '" y2="' + (padT + altoUtil) + '" stroke="#6b7280" stroke-width="1"/>' +
+      ejes + barras +
+      '<text x="' + (padL - 6) + '" y="' + (padT - 4) + '" text-anchor="end" font-size="8" fill="#9ca3af">h</text>' +
+    '</svg></div>';
+}
+
+/* Línea de tiempo de licencias: médicos en filas, días del período en el eje, una barra
+   por licencia con el color del médico. El eje es continuo a lo largo de todo el período,
+   con una línea divisoria y el nombre de cada mes, así un rango que cruza meses se lee
+   de corrido y no en pedazos. */
+function pdfTimelineAusencias(grupos, per) {
+  const tramos = perMeses(per);
+  if (!grupos.length || !tramos.length) return "";
+  // Índice global de día: 0 .. N-1 a lo largo del período.
+  let acum = 0;
+  const base = {};
+  tramos.forEach(s => {
+    base[s.anio + "-" + s.mes] = { inicio: acum, dias: s.dFin - s.dIni + 1, dIni: s.dIni, mes: s.mes, anio: s.anio };
+    acum += s.dFin - s.dIni + 1;
+  });
+  const totalDias = acum;
+  if (!totalDias) return "";
+
+  // Una fila por médico con alguna ausencia en el período.
+  const porMedico = {};
+  grupos.forEach(g => g.lista.forEach(a => {
+    const m = getMedico(a.medicoId); if (!m) return;
+    const b = base[g.anio + "-" + g.mes]; if (!b) return;
+    if (!porMedico[m.id]) porMedico[m.id] = { medico: m, barras: [] };
+    porMedico[m.id].barras.push({
+      ini: b.inicio + (Number(a.desdeRec) - b.dIni),
+      largo: Number(a.hastaRec) - Number(a.desdeRec) + 1,
+      tipo: a.tipo,
+    });
+  }));
+  const filas = Object.keys(porMedico).map(k => porMedico[k])
+    .sort((a, b) => a.medico.nombre.localeCompare(b.medico.nombre));
+  if (!filas.length) return "";
+
+  const W = 1000, padL = 92, padR = 12, padT = 24, altoFila = 15;
+  const H = padT + filas.length * altoFila + 16;
+  const anchoUtil = W - padL - padR;
+  const px = d => padL + (d / totalDias) * anchoUtil;
+
+  let meses = "", rejilla = "";
+  Object.keys(base).forEach(k => {
+    const b = base[k];
+    const x0 = px(b.inicio), x1 = px(b.inicio + b.dias);
+    meses += '<line x1="' + x0.toFixed(1) + '" y1="' + (padT - 12) + '" x2="' + x0.toFixed(1) + '" y2="' + (H - 12) + '" stroke="#cbd5e1" stroke-width="0.8"/>' +
+      '<text x="' + ((x0 + x1) / 2).toFixed(1) + '" y="' + (padT - 15) + '" text-anchor="middle" font-size="9" font-weight="700" fill="#374151">' +
+      pdfSvgTxt(MESES[b.mes] + " " + b.anio) + '</text>';
+    // Marcas cada 5 días, con el número de día del mes.
+    for (let d = b.dIni; d <= b.dIni + b.dias - 1; d++) {
+      if (d % 5 !== 0) continue;
+      const xx = px(b.inicio + (d - b.dIni) + 0.5);
+      rejilla += '<line x1="' + xx.toFixed(1) + '" y1="' + (padT - 6) + '" x2="' + xx.toFixed(1) + '" y2="' + (H - 12) + '" stroke="#eef0f3" stroke-width="0.7"/>' +
+        '<text x="' + xx.toFixed(1) + '" y="' + (H - 3) + '" text-anchor="middle" font-size="6.5" fill="#9ca3af">' + d + '</text>';
+    }
+  });
+
+  let cuerpo = "";
+  filas.forEach((f, i) => {
+    const y0 = padT + i * altoFila;
+    cuerpo += '<text x="' + (padL - 7) + '" y="' + (y0 + altoFila * 0.66).toFixed(1) + '" text-anchor="end" font-size="8.5" fill="#111827">' +
+      pdfSvgTxt(f.medico.nombre) + '</text>';
+    if (i % 2 === 0) cuerpo += '<rect x="' + padL + '" y="' + y0 + '" width="' + anchoUtil + '" height="' + altoFila + '" fill="#f8fafc"/>';
+    f.barras.forEach(b => {
+      const x0 = px(b.ini), x1 = px(b.ini + b.largo);
+      const ti = tipoAus(b.tipo);
+      /* La enfermedad y la licencia se distinguen por el borde y la trama, no sólo por
+         el color: el color ya lo usa el médico, y en blanco y negro no queda nada. */
+      cuerpo += '<rect x="' + x0.toFixed(1) + '" y="' + (y0 + 2.5) + '" width="' + Math.max(1.6, x1 - x0 - 0.8).toFixed(1) +
+        '" height="' + (altoFila - 5) + '" fill="' + escAttr(f.medico.color) + '" stroke="' + escAttr(ti.color) +
+        '" stroke-width="' + (b.tipo === "licencia" ? 1.2 : 0.6) + '" rx="1.5"/>';
+      if (b.tipo !== "licencia") {
+        cuerpo += '<rect x="' + x0.toFixed(1) + '" y="' + (y0 + 2.5) + '" width="' + Math.max(1.6, x1 - x0 - 0.8).toFixed(1) +
+          '" height="' + (altoFila - 5) + '" fill="url(#tramaAus)" rx="1.5"/>';
+      }
+    });
+  });
+
+  return '<div class="graf">' +
+    '<div class="graf-tit">Línea de tiempo de licencias y ausencias — una barra por ausencia, con el color del médico (borde grueso: licencia · con trama: otros tipos)</div>' +
+    '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="' + Math.min(H, 420) + '" xmlns="http://www.w3.org/2000/svg" role="img">' +
+      '<defs><pattern id="tramaAus" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">' +
+        '<line x1="0" y1="0" x2="0" y2="5" stroke="#ffffff" stroke-width="1.4" stroke-opacity="0.85"/></pattern></defs>' +
+      rejilla + meses + cuerpo +
+    '</svg></div>';
+}
+
+/* Barras de días de licencia por mes, apiladas por médico. */
+function pdfBarrasAusencias(grupos) {
+  if (!grupos.length) return "";
+  const porMes = grupos.map(g => {
+    const acc = {};
+    g.lista.forEach(a => {
+      const m = getMedico(a.medicoId); if (!m) return;
+      const dias = Number(a.hastaRec) - Number(a.desdeRec) + 1;
+      if (!acc[m.id]) acc[m.id] = { medico: m, dias: 0 };
+      acc[m.id].dias += dias;
+    });
+    const items = Object.keys(acc).map(k => acc[k]).sort((x, y) => y.dias - x.dias);
+    return { etiqueta: g.etiqueta, items: items, total: items.reduce((n, x) => n + x.dias, 0) };
+  }).filter(x => x.total > 0);
+  if (!porMes.length) return "";
+
+  const W = 1000, H = 260, padL = 40, padR = 10, padT = 14, padB = 34;
+  const anchoUtil = W - padL - padR, altoUtil = H - padT - padB;
+  const paso = anchoUtil / porMes.length;
+  const ancho = Math.min(90, paso * 0.5);
+  const tope = pdfTopeEje(Math.max.apply(null, porMes.map(x => x.total)) || 1);
+  const y = v => padT + altoUtil - (v / tope) * altoUtil;
+
+  let ejes = "";
+  for (let k = 0; k <= 4; k++) {
+    const v = Math.round(tope * k / 4), yy = y(v);
+    ejes += '<line x1="' + padL + '" y1="' + yy.toFixed(1) + '" x2="' + (W - padR) + '" y2="' + yy.toFixed(1) + '" stroke="#d1d5db" stroke-width="0.7"/>' +
+      '<text x="' + (padL - 6) + '" y="' + (yy + 3.5).toFixed(1) + '" text-anchor="end" font-size="9" fill="#6b7280">' + v + '</text>';
+  }
+  let barras = "";
+  porMes.forEach((g, gi) => {
+    const x0 = padL + gi * paso + (paso - ancho) / 2;
+    let abajo = 0;
+    g.items.forEach(it => {
+      const yTop = y(abajo + it.dias), yBot = y(abajo);
+      barras += '<rect x="' + x0.toFixed(1) + '" y="' + yTop.toFixed(1) + '" width="' + ancho.toFixed(1) +
+        '" height="' + Math.max(0.8, yBot - yTop).toFixed(1) + '" fill="' + escAttr(it.medico.color) + '" stroke="#fff" stroke-width="0.7"/>';
+      if (yBot - yTop > 9) {
+        barras += '<text x="' + (x0 + ancho / 2).toFixed(1) + '" y="' + ((yTop + yBot) / 2 + 3).toFixed(1) +
+          '" text-anchor="middle" font-size="7.5" fill="#fff" font-weight="700">' + pdfSvgTxt(it.medico.sigla) + " " + it.dias + '</text>';
+      }
+      abajo += it.dias;
+    });
+    barras += '<text x="' + (x0 + ancho / 2).toFixed(1) + '" y="' + (padT + altoUtil + 13) + '" text-anchor="middle" font-size="9" font-weight="700" fill="#374151">' +
+      pdfSvgTxt(g.etiqueta) + '</text>' +
+      '<text x="' + (x0 + ancho / 2).toFixed(1) + '" y="' + (y(g.total) - 4).toFixed(1) + '" text-anchor="middle" font-size="8.5" font-weight="700" fill="#374151">' +
+      g.total + ' d</text>';
+  });
+  return '<div class="graf">' +
+    '<div class="graf-tit">Días de licencia y ausencia por mes (apilado por médico)</div>' +
+    '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" height="' + H + '" xmlns="http://www.w3.org/2000/svg" role="img">' +
+      '<line x1="' + padL + '" y1="' + (padT + altoUtil) + '" x2="' + (W - padR) + '" y2="' + (padT + altoUtil) + '" stroke="#6b7280" stroke-width="1"/>' +
+      ejes + barras + '</svg></div>';
+}
+
 // ─── EXPORTAR PDF ────────────────────────────────────────────
 // ─── PUNTO 6: OPCIONES DE EXPORTACIÓN ────────────────────────
 function abrirModalPDF() {
-  state.modalPDF = { planilla: true, horas: false, notas: false, ausencias: false, historial: false };
+  state.modalPDF = {
+    planilla: true, horas: false, notas: false, ausencias: false, historial: false,
+    horasModo: "mes",      // "mes" = una tabla por mes · "columnas" = meses en columnas
+    horasGrafica: false,   // barras por médico y por mes, día claro / noche oscuro
+    licTimeline: false,    // línea de tiempo de licencias
+    licBarras: false,      // días de licencia por mes
+  };
+  render();
+}
+function setPDFHorasModo(v) {
+  if (!state.modalPDF) return;
+  state.modalPDF.horasModo = (v === "columnas") ? "columnas" : "mes";
   render();
 }
 function cerrarModalPDF() { state.modalPDF = null; render(); }
@@ -3513,6 +3776,13 @@ function renderModalPDF() {
     '<span style="flex:1"><span style="font-size:0.85rem;font-weight:600;color:#111827">' + label + '</span>' +
     (extra ? '<span style="display:block;font-size:0.7rem;color:#6b7280;margin-top:1px">' + extra + '</span>' : "") +
     '</span></label>';
+  const subOpciones = items => '<div style="margin:-4px 0 10px 26px;padding-left:10px;border-left:2px solid #dbeafe">' + items.join("") + '</div>';
+  const radioSub = (campo, valor, label, puesto) => '<label style="display:flex;align-items:center;gap:7px;padding:3px 0;cursor:pointer">' +
+    '<input type="radio" name="pdf-' + campo + '"' + (puesto ? " checked" : "") + ' onchange="setPDFHorasModo(\'' + valor + '\')" style="accent-color:#2563eb">' +
+    '<span style="font-size:0.76rem;color:#374151">' + label + '</span></label>';
+  const checkSub = (campo, label, puesto) => '<label style="display:flex;align-items:center;gap:7px;padding:3px 0;cursor:pointer">' +
+    '<input type="checkbox"' + (puesto ? " checked" : "") + ' onchange="togglePDFOpt(\'' + campo + '\')" style="accent-color:#2563eb">' +
+    '<span style="font-size:0.76rem;color:#374151">' + label + '</span></label>';
 
   return '<div class="modal-bg" onclick="if(event.target===this)cerrarModalPDF()">' +
     '<div class="modal-box modal-scroll" style="max-width:470px">' +
@@ -3527,8 +3797,17 @@ function renderModalPDF() {
         renderSelectorPeriodo("pdf") +
         fila("planilla", "Planilla de guardias", "Calendario, una hoja por mes", true) +
         fila("horas", "Horas por médico", hayHoras ? "Guardias, horas totales y promedio" : "Sin guardias cargadas en el período", hayHoras) +
+        ((o.horas && hayHoras) ? subOpciones([
+          radioSub("horasModo", "mes", "Una tabla por mes", o.horasModo === "mes"),
+          radioSub("horasModo", "columnas", "Una tabla con los meses en columnas", o.horasModo === "columnas"),
+          checkSub("horasGrafica", "Agregar gráfica de barras (día claro / noche oscuro)", o.horasGrafica),
+        ]) : "") +
         fila("notas", "Notas del mes", hayNotas ? "Texto del panel 📝 Notas del mes" : "No hay notas escritas en el período", hayNotas) +
         fila("ausencias", "Licencias y ausencias", hayAus ? "Médico, tipo, período y motivo" : "Sin ausencias registradas en el período", hayAus) +
+        ((o.ausencias && hayAus) ? subOpciones([
+          checkSub("licTimeline", "Agregar línea de tiempo (médicos en filas, días en el eje)", o.licTimeline),
+          checkSub("licBarras", "Agregar barras de días de licencia por mes", o.licBarras),
+        ]) : "") +
         fila("historial", "Historial de intercambios y movimientos", hayHist ? "Permutas y traslados de guardia" : "Sin intercambios registrados", hayHist) +
         (nada ? '<div style="font-size:0.72rem;color:#b91c1c;font-weight:600;margin-bottom:10px">Elegí al menos una sección para poder exportar.</div>' : "") +
       '</div>' +
@@ -3539,55 +3818,71 @@ function renderModalPDF() {
     '</div></div>';
 }
 
+/* ─── EXPORTAR PDF ───────────────────────────────────────────
+   Orden fijo del informe: Calendario → Horas → Licencias → Historial. Sólo se imprime
+   lo que esté tildado, y una sección sin datos en el período no genera hoja: una hoja
+   vacía con encabezado institucional parece un informe completo al que le falta todo.
+   Toda la hoja es A4 apaisado (ya lo era antes de esta tanda), así que la hoja de Horas
+   sale horizontal sin tener que mezclar orientaciones dentro de un mismo PDF —que es lo
+   que ni Safari ni Chrome hacen desde window.print()—. */
 function exportarPDF(opciones) {
-  const opt = opciones || { planilla: true, horas: true, notas: true, ausencias: false, historial: false };
-  const totalD = new Date(state.anio, state.mes+1, 0).getDate();
-  const primerD = (new Date(state.anio, state.mes, 1).getDay() + 6) % 7; // base-lunes
-  const notas = cargarNotasMes();
+  const opt = Object.assign({
+    planilla: true, horas: false, notas: false, ausencias: false, historial: false,
+    horasModo: "mes", horasGrafica: false, licTimeline: false, licBarras: false,
+  }, opciones || {});
+  const per = perNorm(opt.periodo || perDefecto());
+  if (!perValido(per)) { alert("Elegí las dos fechas del rango antes de exportar."); return; }
 
-  const celdaHTML = (fecha) => {
-    const data = diaData(fecha);
+  const ag = perAgregar(per);
+  const conDatos = ag.meses.filter(m => m.hayCal);
+  const cfg = state.config || {};
+  const logo = logoSeguro();
+  const etPer = perEtiqueta(per);
+
+  // Encabezado institucional, repetido en cada hoja del informe.
+  const enc = (titulo, sub) => '<div class="pdf-head">' +
+    (logo ? '<img class="pdf-logo" src="' + escAttr(logo) + '" alt="">' : "") +
+    (cfg.institucion ? '<div class="pdf-inst">' + escHTML(cfg.institucion) + '</div>' : "") +
+    (cfg.servicio ? '<div class="pdf-servicio">' + escHTML(cfg.servicio) + '</div>' : "") +
+    (cfg.coordinador ? '<div class="pdf-coord">' + escHTML(cfg.coordinador) + '</div>' : "") +
+    '<div class="pdf-linea"></div>' +
+    '<h1 class="titulo">' + escHTML(titulo) + '</h1>' +
+    (sub ? '<div class="pdf-sub">' + escHTML(sub) + '</div>' : "") +
+    '</div>';
+
+  // ─── Celda de un día del calendario ───
+  const celdaHTML = (fecha, dentro) => {
     const dia = Number(fecha.split("-")[2]);
+    if (!dentro) return '<td class="fuera"></td>';   // día fuera del rango elegido
+    const cal = perCal(Number(fecha.split("-")[0]), Number(fecha.split("-")[1]) - 1);
+    const data = cal[fecha] || { asignaciones: [], notas: "" };
     const asigsOrd = ordenarAsignaciones(data.asignaciones);
-    // Los pendientes van aparte: en el PDF el rojo queda reservado para ellos.
     const pendientes = asigsOrd.filter(a => esPendiente(a));
-    const cubiertas  = asigsOrd.filter(a => !esPendiente(a));
-    const principal = cubiertas.filter(a => a.rol === "D12" || a.rol === "N12");
-    const apoyo = cubiertas.filter(a => a.rol !== "D12" && a.rol !== "N12");
+    const cubiertas = asigsOrd.filter(a => !esPendiente(a));
+    const principal = cubiertas.filter(a => esGuardia(a));
+    const apoyo = cubiertas.filter(a => !esGuardia(a));
 
-    // Médico principal en negro
     const principalHTML = principal.map(a => {
       const m = getMedico(a.medicoId);
-      if(!m) return "";
-      return `<div class="p-med">${escHTML(m.nombre)}<span class="p-hora"> · ${escHTML(horarioDe(a))}</span></div>`;
+      return m ? '<div class="p-med">' + escHTML(m.nombre) + '<span class="p-hora"> · ' + escHTML(horarioDe(a)) + '</span></div>' : "";
     }).join("");
-
-    // Médicos de apoyo en ámbar
     const apoyoHTML = apoyo.map(a => {
       const m = getMedico(a.medicoId);
-      if(!m) return "";
-      return `<div class="a-med">${escHTML(m.nombre)}<span class="a-hora"> · ${escHTML(horarioDe(a))}</span></div>`;
+      return m ? '<div class="a-med">' + escHTML(m.nombre) + '<span class="a-hora"> · ' + escHTML(horarioDe(a)) + '</span></div>' : "";
     }).join("");
-
-    // Turnos sin cubrir: franja roja ubicada según el horario que falta.
-    // Diurno arriba (antes de los médicos), nocturno abajo (después).
-    // Una sola línea discreta: el horario ya dice qué turno falta.
     const franja = a => {
-      const hora = (a.horario && String(a.horario).trim())
-        ? String(a.horario)
+      const hora = (a.horario && String(a.horario).trim()) ? String(a.horario)
         : (a.rol !== "PEN" ? getRol(a.rol).label : "horario a definir");
-      return `<div class="pen-band">⚠ Pendiente · ${escHTML(hora)}</div>`;
+      return '<div class="pen-band">⚠ Pendiente · ' + escHTML(hora) + '</div>';
     };
     const esNocturno = a => {
       const h = horaInicioDe(a);
       return a.rol === "N12" || ((h != null) && (h >= 19 || h < 6));
     };
     const penArriba = pendientes.filter(a => !esNocturno(a)).map(franja).join("");
-    const penAbajo  = pendientes.filter(esNocturno).map(franja).join("");
-
+    const penAbajo = pendientes.filter(esNocturno).map(franja).join("");
     const medicosHTML = principalHTML + apoyoHTML;
-    const sep = `<div class="pen-sep"></div>`;
-    // Separadores solo cuando conviven franja y médicos reales.
+    const sep = '<div class="pen-sep"></div>';
     const cuerpo = [
       penArriba,
       (penArriba && medicosHTML) ? sep : "",
@@ -3595,176 +3890,281 @@ function exportarPDF(opciones) {
       (penAbajo && (medicosHTML || penArriba)) ? sep : "",
       penAbajo,
     ].join("");
-
-    // Día con SOLO pendientes: toda la celda en rojo claro.
     const soloPend = pendientes.length > 0 && cubiertas.length === 0;
-    return `<td class="${soloPend ? "solo-pendiente" : ""}"><div class="num">${dia}</div>${cuerpo}</td>`;
+    return '<td class="' + (soloPend ? "solo-pendiente" : "") + '"><div class="num">' + dia + '</div>' + cuerpo + '</td>';
   };
 
-  const vacias = Array.from({length:primerD}, () => `<td class="vacio"></td>`);
-  const diasCeldas = Array.from({length:totalD}, (_,i) => {
-    const f = `${state.anio}-${String(state.mes+1).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`;
-    return celdaHTML(f);
-  });
-  const relleno = Array.from({length:(7-((primerD+totalD)%7))%7}, () => `<td class="vacio"></td>`);
-  const todas = [...vacias, ...diasCeldas, ...relleno];
-  const filas = [];
-  for(let i=0; i<todas.length; i+=7) filas.push(`<tr>${todas.slice(i,i+7).join("")}</tr>`);
+  // ─── Tabla calendario de un mes (en modo rango, sólo los días del rango) ───
+  const tablaMes = (m, conNotas) => {
+    const totalD = new Date(m.anio, m.mes + 1, 0).getDate();
+    const primerD = (new Date(m.anio, m.mes, 1).getDay() + 6) % 7;   // base-lunes
+    const vacias = [];
+    for (let k = 0; k < primerD; k++) vacias.push('<td class="vacio"></td>');
+    const celdas = [];
+    for (let d = 1; d <= totalD; d++) {
+      const f = m.anio + "-" + String(m.mes + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+      celdas.push(celdaHTML(f, d >= m.dIni && d <= m.dFin));
+    }
+    const relleno = [];
+    for (let k = 0; k < (7 - ((primerD + totalD) % 7)) % 7; k++) relleno.push('<td class="vacio"></td>');
+    const todas = vacias.concat(celdas, relleno);
+    const filas = [];
+    for (let i = 0; i < todas.length; i += 7) filas.push("<tr>" + todas.slice(i, i + 7).join("") + "</tr>");
+    /* Alto útil de un A4 apaisado a 96 ppp: 210 mm menos 24 mm de márgenes son ~703 px.
+       Descontando el encabezado institucional (~122 px), la fila de días (~27 px) y, si
+       va, el bloque de notas (~62 px), queda esto para la grilla. Medido en el navegador
+       a ancho de hoja, no estimado. */
+    const disponible = (conNotas ? 435 : 505);
+    const altoFila = disponible / filas.length;
+    // Día más cargado del mes: es el que decide si el texto entra o la fila se estira.
+    let maxEnt = 1;
+    for (let d = m.dIni; d <= m.dFin; d++) {
+      const f = m.anio + "-" + String(m.mes + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+      const cal = perCal(m.anio, m.mes);
+      const n = ((cal[f] && cal[f].asignaciones) || []).length;
+      if (n > maxEnt) maxEnt = n;
+    }
+    /* Cada entrada ocupa alto de línea + separación; la celda gasta además el número de
+       día y el relleno, que se cobran igual tenga una asignación o seis. Con cinco o más
+       por día se pasa a modo denso: relleno y número de día chicos, que es lo que hace
+       entrar el mes sin bajar el texto por debajo del piso legible. */
+    const denso = maxEnt >= 5;
+    const fijo = denso ? 13 : 24;                          // número de día + relleno
+    const porEntrada = Math.max(8, (altoFila - fijo) / maxEnt);
+    const fs = Math.max(5.6, Math.min(8, (porEntrada - 2) / 1.73));
+    const altoCelda = Math.max(30, Math.floor(altoFila) - 2);
+    /* Con el cuerpo de letra ya en el piso, el día más cargado puede seguir sin entrar.
+       Se devuelve ese dato para que el llamador decida qué mover. */
+    const altoNecesario = filas.length * (fijo + maxEnt * (fs * 1.73 + 2));
+    const html = '<table class="cal" style="--hcel:' + altoCelda + 'px;--fscel:' + fs.toFixed(2) + 'pt' +
+      ';--pcel:' + (denso ? "2px 4px" : "5px 6px") + ';--numfs:' + (denso ? "6pt" : "7.5pt") +
+      ';--nummb:' + (denso ? "0px" : "2px") + '"><thead><tr>' +
+      ["L", "M", "M", "J", "V", "S", "D"].map(d => "<th>" + d + "</th>").join("") +
+      '</tr></thead><tbody>' + filas.join("\n") + '</tbody></table>';
+    return { html: html, cabe: altoNecesario <= disponible };
+  };
 
-  const notasHTML = (opt.notas && notas.trim())
-    ? `<div>
-         <div class="notas-titulo">Notas</div>
-         <div class="notas-cuerpo">${escHTML(notas)}</div>
-       </div>`
+  const bloqueNotas = (texto) => '<div class="notas-wrap">' +
+    '<div class="notas-titulo">Notas del mes</div>' +
+    '<div class="notas-cuerpo">' + escHTML(texto) + '</div></div>';
+
+  const hojas = [];
+
+  // ─── 1. Calendario: una hoja por mes, con las notas de ese mes en la misma hoja ───
+  if (opt.planilla) {
+    conDatos.forEach(m => {
+      const rec = (m.dIni > 1 || m.dFin < new Date(m.anio, m.mes + 1, 0).getDate());
+      const sub = rec ? ("Días " + m.dIni + " a " + m.dFin + " · período " + etPer) : (cfg.servicio || "");
+      const notas = (opt.notas ? perNotas(m.anio, m.mes) : "").trim();
+      const conNotas = tablaMes(m, !!notas);
+      if (notas && !conNotas.cabe) {
+        // El mes no entra junto con las notas: el mes se queda entero y las notas pasan a su hoja.
+        hojas.push(enc(MESES[m.mes].toUpperCase() + " " + m.anio, sub) + tablaMes(m, false).html);
+        hojas.push(enc("NOTAS DE " + MESES[m.mes].toUpperCase() + " " + m.anio, sub) + bloqueNotas(notas));
+      } else {
+        hojas.push(enc(MESES[m.mes].toUpperCase() + " " + m.anio, sub) + conNotas.html +
+          (notas ? bloqueNotas(notas) : ""));
+      }
+    });
+  }
+
+  // ─── 2. Notas tildadas SIN calendario: todas juntas, separadas por mes ───
+  if (opt.notas && !opt.planilla) {
+    const partes = ag.meses.map(m => {
+      const t = perNotas(m.anio, m.mes);
+      return t.trim() ? '<div class="nota-mes"><div class="nota-mes-tit">' + escHTML(m.etiqueta) + '</div>' +
+        '<div class="notas-cuerpo">' + escHTML(t) + '</div></div>' : "";
+    }).filter(Boolean);
+    if (partes.length) hojas.push(enc("NOTAS DEL PERÍODO", etPer) + partes.join(""));
+  }
+
+  // ─── 3. Horas por médico ───
+  if (opt.horas && ag.filas.length) {
+    let tablas = "";
+    if (opt.horasModo === "columnas") {
+      /* Un solo cuadro con los meses en columnas. Cada celda dice las tres cosas que
+         importan: cuántas guardias, cuántas horas y el promedio por guardia. */
+      const cab = conDatos.map(m => '<th>' + escHTML(m.etiqueta) + '</th>').join("");
+      const cuerpo = ag.filas.map(x => {
+        const celdas = conDatos.map(m => {
+          const c = m.porMedico[x.medico.id];
+          if (!c || !c.guardias) return '<td class="cero">—</td>';
+          return '<td class="celda-mes">' + c.guardias + ' · <b>' + fmtH(c.horas) + ' h</b> · ' + fmtH(c.horas / c.guardias) + ' h</td>';
+        }).join("");
+        return '<tr><td class="nom">' + escHTML(x.medico.nombre) + '</td>' + celdas +
+          '<td class="celda-mes total">' + x.guardias + ' · <b>' + fmtH(x.horas) + ' h</b> · ' + fmtH(x.promedio) + ' h</td></tr>';
+      }).join("");
+      const tot = ag.filas.reduce((t, x) => ({ g: t.g + x.guardias, h: t.h + x.horas }), { g: 0, h: 0 });
+      tablas = '<table class="sec horas-col"><thead><tr><th style="text-align:left">Médico</th>' + cab +
+        '<th>Total del período</th></tr></thead><tbody>' + cuerpo + '</tbody>' +
+        '<tfoot><tr><td class="nom">TOTALES</td>' +
+        conDatos.map(m => {
+          const g = Object.keys(m.porMedico).reduce((n, k) => n + m.porMedico[k].guardias, 0);
+          const h = Object.keys(m.porMedico).reduce((n, k) => n + m.porMedico[k].horas, 0);
+          return '<td class="celda-mes">' + g + ' · <b>' + fmtH(h) + ' h</b></td>';
+        }).join("") +
+        '<td class="celda-mes total">' + tot.g + ' · <b>' + fmtH(tot.h) + ' h</b></td></tr></tfoot></table>' +
+        '<div class="leyenda-cel">Cada celda: guardias · horas totales · promedio por guardia.</div>';
+    } else {
+      // Una tabla por mes, más el total del período al final.
+      const unaTabla = (titulo, filas) => {
+        if (!filas.length) return "";
+        const cuerpo = filas.map(x => '<tr><td class="nom">' + escHTML(x.medico.nombre) + '</td>' +
+          '<td class="num">' + x.guardias + '</td>' +
+          '<td class="num">' + x.dia + '</td>' +
+          '<td class="num">' + x.noche + '</td>' +
+          '<td class="num">' + x.apoyo + '</td>' +
+          '<td class="num fuerte">' + fmtH(x.horas) + ' h</td>' +
+          '<td class="num">' + fmtH(x.horasDia) + ' h</td>' +
+          '<td class="num">' + fmtH(x.horasNoche) + ' h</td>' +
+          '<td class="num">' + fmtH(x.guardias ? x.horas / x.guardias : 0) + ' h</td></tr>').join("");
+        const t = filas.reduce((a, x) => ({ g: a.g + x.guardias, h: a.h + x.horas, hd: a.hd + x.horasDia, hn: a.hn + x.horasNoche }), { g: 0, h: 0, hd: 0, hn: 0 });
+        return '<div class="tabla-mes"><div class="sec-tit">' + escHTML(titulo) + '</div>' +
+          '<table class="sec"><thead><tr><th style="text-align:left">Médico</th>' +
+          ["Guardias", "Día", "Noche", "Apoyos", "Horas", "h día", "h noche", "Promedio"].map(h => "<th>" + h + "</th>").join("") +
+          '</tr></thead><tbody>' + cuerpo + '</tbody>' +
+          '<tfoot><tr><td class="nom">TOTALES</td><td class="num">' + t.g + '</td><td class="num"></td><td class="num"></td><td class="num"></td>' +
+          '<td class="num fuerte">' + fmtH(t.h) + ' h</td><td class="num">' + fmtH(t.hd) + ' h</td><td class="num">' + fmtH(t.hn) + ' h</td><td class="num"></td>' +
+          '</tr></tfoot></table></div>';
+      };
+      tablas = conDatos.map(m => {
+        const filas = Object.keys(m.porMedico).map(k => m.porMedico[k]).sort((a, b) => b.horas - a.horas || a.medico.nombre.localeCompare(b.medico.nombre));
+        return unaTabla(m.etiqueta, filas);
+      }).join("");
+      if (conDatos.length > 1) tablas += unaTabla("Total del período — " + etPer, ag.filas);
+    }
+    hojas.push(enc("HORAS POR MÉDICO", etPer) + tablas + (opt.horasGrafica ? pdfGraficaHoras(ag) : ""));
+  }
+
+  // ─── 4. Licencias y ausencias ───
+  if (opt.ausencias) {
+    const grupos = perAusencias(per);
+    if (grupos.length) {
+      const bloques = grupos.map(g => {
+        const filas = g.lista.map(a => {
+          const m = getMedico(a.medicoId);
+          const ti = tipoAus(a.tipo);
+          const parcial = (a.fDesde && a.fHasta) ? fmtRangoAus(a) : "";
+          const recorte = a.desdeRec + " al " + a.hastaRec + " de " + MESES[g.mes];
+          const dias = Number(a.hastaRec) - Number(a.desdeRec) + 1;
+          return '<tr><td>' + escHTML(m ? m.nombre : "—") + '</td>' +
+            '<td>' + escHTML(ti.label) + '</td>' +
+            '<td>' + escHTML(recorte) + '</td>' +
+            '<td class="num">' + dias + '</td>' +
+            '<td>' + escHTML(parcial || "—") + '</td>' +
+            '<td>' + escHTML(a.motivo || "—") + '</td></tr>';
+        }).join("");
+        const totalDias = g.lista.reduce((n, a) => n + (Number(a.hastaRec) - Number(a.desdeRec) + 1), 0);
+        return '<div class="tabla-mes"><div class="sec-tit">' + escHTML(g.etiqueta) + '</div>' +
+          '<table class="sec"><thead><tr>' +
+          ["Médico", "Tipo", "Período en el mes", "Días", "Período completo", "Motivo"].map(h => "<th>" + h + "</th>").join("") +
+          '</tr></thead><tbody>' + filas + '</tbody>' +
+          '<tfoot><tr><td colspan="3">TOTAL ' + escHTML(g.etiqueta) + '</td><td class="num">' + totalDias + '</td><td></td><td></td></tr></tfoot>' +
+          '</table></div>';
+      }).join("");
+      const notaParte = grupos.length > 1
+        ? '<div class="leyenda-cel">Una licencia que cruza de mes aparece en cada mes con la parte que le corresponde; la columna «Período completo» muestra el rango entero.</div>'
+        : "";
+      hojas.push(enc("LICENCIAS Y AUSENCIAS", etPer) + bloques + notaParte +
+        (opt.licTimeline ? pdfTimelineAusencias(grupos, per) : "") +
+        (opt.licBarras ? pdfBarrasAusencias(grupos) : ""));
+    }
+  }
+
+  // ─── 5. Historial de intercambios y movimientos ───
+  if (opt.historial) {
+    const bloques = conDatos.map(m => {
+      const evs = eventosIntercambioDias(m.anio, m.mes, m.dIni, m.dFin);
+      if (!evs.length) return "";
+      const filas = evs.map(e => {
+        const dias = e.direccional ? (e.dias[0] + " → " + e.dias[1]) : e.dias.join(" ⇄ ");
+        return '<tr><td>' + escHTML(dias) + " " + escHTML(MESES_CORTO[m.mes]) + '</td>' +
+          '<td>' + escHTML(e.medicos) + '</td><td>' + escHTML(e.tipo) + '</td>' +
+          '<td>' + escHTML(e.detalle || "—") + '</td><td>' + escHTML(e.motivo || "—") + '</td></tr>';
+      }).join("");
+      return '<div class="tabla-mes"><div class="sec-tit">' + escHTML(m.etiqueta) + '</div>' +
+        '<table class="sec"><thead><tr>' + ["Fecha", "Médico(s)", "Tipo", "Detalle", "Motivo"].map(h => "<th>" + h + "</th>").join("") +
+        '</tr></thead><tbody>' + filas + '</tbody></table></div>';
+    }).filter(Boolean).join("");
+    if (bloques) hojas.push(enc("INTERCAMBIOS Y MOVIMIENTOS", etPer) + bloques);
+  }
+
+  if (!hojas.length) {
+    alert("No hay nada para imprimir con lo elegido en " + etPer + ".\n\nRevisá el período y las secciones tildadas.");
+    return;
+  }
+
+  /* Los meses del período sin calendario guardado se declaran en el informe, no sólo en
+     pantalla: si no, una hoja que falta se lee como un mes sin guardias. */
+  const avisoFaltan = ag.sinDatos.length
+    ? '<div class="aviso-faltan">Sin guardias cargadas en ' + ag.sinDatos.map(x => escHTML(x.etiqueta)).join(", ") +
+      ': ' + (ag.sinDatos.length === 1 ? "ese mes no se incluyó" : "esos meses no se incluyeron") + ' en este informe.</div>'
     : "";
 
-  // MEJORA 9: resumen de horas por médico en el PDF
-  const rhPDF = resumenHoras();
-  const horasPDF = (opt.horas && rhPDF.length)
-    ? `<div class="${opt.planilla ? "bloque-pagina" : ""}">
-         <div style="font-size:11pt;font-weight:700;color:#111;margin-bottom:6px">Resumen de horas por médico</div>
-         <table style="width:auto;min-width:60%;border-collapse:collapse;font-size:9pt">
-           <thead><tr>${["Médico","Guardias","Horas totales","Promedio"].map(h=>`<th style="height:auto;background:#e5e7eb;border:1px solid #9ca3af;padding:4px 10px;text-align:left">${h}</th>`).join("")}</tr></thead>
-           <tbody>${rhPDF.map(x=>`<tr>
-             <td style="height:auto;border:1px solid #cbd5e1;padding:3px 10px">${escHTML(x.medico.nombre)}</td>
-             <td style="height:auto;border:1px solid #cbd5e1;padding:3px 10px;text-align:center">${x.guardias}</td>
-             <td style="height:auto;border:1px solid #cbd5e1;padding:3px 10px;text-align:center;font-weight:700">${x.horas} h</td>
-             <td style="height:auto;border:1px solid #cbd5e1;padding:3px 10px;text-align:center">${x.promedio.toFixed(1)} h</td>
-           </tr>`).join("")}</tbody>
-         </table>
-       </div>`
-    : "";
+  const hoy = new Date();
+  const emision = hoy.toLocaleDateString("es") + " " + hoy.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
+  const pie = '<div class="pdf-pie">Emitido el ' + escHTML(emision) + ' · ' + escHTML(SHARE_BASE) + '</div>';
 
-  // Encabezado que se repite en cada sección extra: servicio + mes.
-  const subtituloSec = escHTML([(state.config || {}).servicio, `${MESES[state.mes]} ${state.anio}`].filter(Boolean).join(" · "));
+  const html = '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+'<title>Guardias ' + escHTML(etPer) + '</title>' +
+'<style>' +
+'  @page { size: 297mm 210mm; margin: 12mm 10mm; }   /* A4 apaisado, en mm para máxima compatibilidad */' +
+'  * { box-sizing:border-box; margin:0; padding:0; }' +
+'  body { font-family: Arial, Helvetica, sans-serif; color:#111; background:#fff;' +
+'         -webkit-print-color-adjust: exact; print-color-adjust: exact; }' +
+'  .hoja { page-break-before: always; break-before: page; }' +
+'  .hoja:first-child { page-break-before: auto; break-before: auto; }' +
+'  .pdf-head { position:relative; text-align:center; margin-bottom:12px; min-height:1px; }' +
+'  .pdf-logo { position:absolute; top:0; right:0; max-height:60px; max-width:170px; display:block; }' +
+'  .pdf-inst { font-size:10pt; font-weight:600; color:#6b7280; letter-spacing:.5px; }' +
+'  .pdf-servicio { font-size:14pt; font-weight:700; text-transform:uppercase; color:#111; letter-spacing:.6px; }' +
+'  .pdf-coord { font-size:10pt; color:#6b7280; margin-top:2px; }' +
+'  .pdf-linea { border-top:1px solid #d1d5db; margin:7px 0 9px; }' +
+'  .pdf-sub { font-size:9.5pt; color:#6b7280; margin-top:4px; }' +
+'  h1.titulo { text-align:center; font-family:Georgia,"Times New Roman",serif; font-size:21pt; font-weight:700; letter-spacing:1px; color:#111; margin:0; }' +
+'  table.cal { width:100%; border-collapse:collapse; table-layout:fixed; }' +
+'  table.cal thead th { background:#e5e7eb; color:#374151; font-size:9pt; font-weight:700; padding:6px 0; text-align:center; border:1px solid #9ca3af; }' +
+'  table.cal td { border:1px solid #9ca3af; vertical-align:top; padding:var(--pcel,5px 6px); height:var(--hcel,86px); background:#fff; }' +
+'  table.cal td.vacio { background:#fff; }' +
+'  /* Día que queda fuera del rango elegido: la grilla conserva su forma pero la celda no' +
+'     trae contenido, para que no se lea como un día sin guardias. */' +
+'  table.cal td.fuera { background:#f3f4f6; }' +
+'  .num { font-size:var(--numfs,7.5pt); font-weight:700; color:#6b7280; margin-bottom:var(--nummb,2px); line-height:1.15; }' +
+'  .p-med { font-size:var(--fscel,8pt); font-weight:700; color:#000; line-height:1.3; margin-bottom:2px; }' +
+'  .p-hora { font-weight:400; color:#374151; font-size:0.88em; }' +
+'  .a-med { font-size:var(--fscel,8pt); font-weight:600; color:#b45309; line-height:1.3; margin-bottom:2px; }' +
+'  .a-hora { font-weight:400; color:#b45309; font-size:0.85em; }' +
+'  .pen-band { background:#fef2f2; border-left:3px solid #dc2626; padding:1px 4px; margin-bottom:2px;' +
+'              font-size:var(--fscel,8pt); font-weight:600; color:#dc2626; line-height:1.2; }' +
+'  .pen-sep { border-top:1px solid #e5e7eb; margin:3px 0; }' +
+'  table.cal td.solo-pendiente { background:#fef2f2; }' +
+'  .tabla-mes { margin-bottom:14px; }' +
+'  .sec-tit { font-size:11pt; font-weight:700; color:#111; margin:0 0 4px; }' +
+'  table.sec { width:100%; border-collapse:collapse; font-size:8.5pt; table-layout:auto; }' +
+'  table.sec th { background:#e5e7eb; border:1px solid #9ca3af; padding:4px 8px; text-align:center; font-size:8pt; }' +
+'  table.sec td { border:1px solid #cbd5e1; padding:4px 8px; height:auto; vertical-align:top; }' +
+'  table.sec td.nom { font-weight:600; white-space:nowrap; }' +
+'  table.sec td.num { text-align:center; }' +
+'  table.sec td.fuerte { font-weight:700; }' +
+'  table.sec tfoot td { background:#e5e7eb; font-weight:700; border:1px solid #9ca3af; }' +
+'  table.horas-col td.celda-mes { text-align:center; white-space:nowrap; font-size:8.5pt; }' +
+'  table.horas-col td.cero { text-align:center; color:#9ca3af; }' +
+'  table.horas-col td.total { background:#f1f5f9; }' +
+'  .leyenda-cel { font-size:7.5pt; color:#6b7280; margin-top:3px; }' +
+'  .notas-wrap { margin-top:10px; }' +
+'  .notas-titulo { font-size:11pt; font-weight:700; color:#111; margin-bottom:5px; border-bottom:1px solid #9ca3af; padding-bottom:3px; }' +
+'  .notas-cuerpo { font-size:9pt; color:#374151; line-height:1.5; white-space:pre-wrap; }' +
+'  .nota-mes { margin-bottom:14px; }' +
+'  .nota-mes-tit { font-size:10.5pt; font-weight:700; color:#111; border-bottom:1px solid #cbd5e1; padding-bottom:3px; margin-bottom:5px; }' +
+'  .graf { margin-top:14px; page-break-inside: avoid; break-inside: avoid; }' +
+'  .graf-tit { font-size:9pt; font-weight:700; color:#374151; margin-bottom:5px; }' +
+'  .aviso-faltan { margin-top:12px; font-size:8.5pt; color:#92400e; background:#fffbeb; border:1px solid #fcd34d;' +
+'                  border-radius:4px; padding:5px 8px; }' +
+'  .pdf-pie { margin-top:14px; font-size:7.5pt; color:#9ca3af; text-align:right; }' +
+'</style></head><body>' +
+hojas.map((h, i) => '<section class="hoja">' + h + (i === hojas.length - 1 ? avisoFaltan + pie : "") + '</section>').join("") +
+'</body></html>';
 
-  // ─── Licencias y ausencias del mes ───
-  const ausPDF = (function () {
-    if (!opt.ausencias) return "";
-    const arr = ausGet().slice().sort((a, b) => a.desde - b.desde);
-    if (!arr.length) return "";
-    const filas = arr.map(a => {
-      const m = getMedico(a.medicoId);
-      const ti = tipoAus(a.tipo);
-      // Con fechas completas se muestran tal cual; las ausencias viejas solo tienen día del mes.
-      const desde = a.fDesde ? fmtFechaCorta(a.fDesde) : `${a.desde} ${MESES_CORTO[state.mes]}`;
-      const hasta = a.fHasta ? fmtFechaCorta(a.fHasta) : `${a.hasta} ${MESES_CORTO[state.mes]}`;
-      return `<tr>
-        <td>${escHTML(m ? m.nombre : "—")}</td>
-        <td>${escHTML(ti.label)}</td>
-        <td>${escHTML(desde)}</td>
-        <td>${escHTML(hasta)}</td>
-        <td>${escHTML(a.motivo || "—")}</td>
-      </tr>`;
-    }).join("");
-    return `<div>
-      <div class="sec-tit">Licencias y ausencias del mes</div>
-      <div class="sec-sub">${subtituloSec}</div>
-      <table class="sec">
-        <thead><tr>${["Médico", "Tipo", "Desde", "Hasta", "Motivo"].map(h => `<th>${h}</th>`).join("")}</tr></thead>
-        <tbody>${filas}</tbody>
-      </table>
-    </div>`;
-  })();
-
-  // ─── Historial de intercambios y movimientos ───
-  const histPDF = (function () {
-    if (!opt.historial) return "";
-    const evs = eventosIntercambioMes();
-    if (!evs.length) return "";
-    const filas = evs.map(e => {
-      const dias = e.direccional ? `${e.dias[0]} → ${e.dias[1]}` : e.dias.join(" ⇄ ");
-      return `<tr>
-        <td>${escHTML(dias)} ${escHTML(MESES_CORTO[state.mes])}</td>
-        <td>${escHTML(e.medicos)}</td>
-        <td>${escHTML(e.tipo)}</td>
-        <td>${escHTML(e.detalle || "—")}</td>
-        <td>${escHTML(e.motivo || "—")}</td>
-      </tr>`;
-    }).join("");
-    return `<div>
-      <div class="sec-tit">Historial de intercambios y movimientos</div>
-      <div class="sec-sub">${subtituloSec}</div>
-      <table class="sec">
-        <thead><tr>${["Fecha", "Médico(s)", "Tipo", "Detalle", "Motivo"].map(h => `<th>${h}</th>`).join("")}</tr></thead>
-        <tbody>${filas}</tbody>
-      </table>
-    </div>`;
-  })();
-
-  // ─── BLOQUE 3: novedades (notas + ausencias + historial) en UNA sola página ───
-  // Se separan entre sí con una línea fina, nunca con salto de página.
-  const partesNov = [notasHTML, ausPDF, histPDF].filter(Boolean);
-  const novedadesPDF = partesNov.length
-    ? `<div class="${(opt.planilla || horasPDF) ? "bloque-pagina" : ""}">${partesNov.join('<div class="nov-sep"></div>')}</div>`
-    : "";
-
-  const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
-<title>Guardias ${MESES[state.mes]} ${state.anio}</title>
-<style>
-  @page { size: 297mm 210mm; margin: 12mm 10mm; }   /* A4 apaisado, en mm para máxima compatibilidad */
-  * { box-sizing:border-box; margin:0; padding:0; }
-  body { font-family: Arial, Helvetica, sans-serif; color:#111; background:#fff;
-         -webkit-print-color-adjust: exact; print-color-adjust: exact; }   /* que los fondos se impriman */
-  /* Encabezado: logo a la derecha, títulos centrados, línea separadora */
-  .pdf-head { position:relative; text-align:center; margin-bottom:26px; min-height:1px; }
-  .pdf-logo { position:absolute; top:0; right:0; max-height:60px; max-width:170px; display:block; }
-  .pdf-inst { font-size:10pt; font-weight:600; color:#6b7280; letter-spacing:.5px; }
-  .pdf-servicio { font-size:14pt; font-weight:700; text-transform:uppercase; color:#111; letter-spacing:.6px; }
-  .pdf-coord { font-size:10pt; color:#6b7280; margin-top:2px; }
-  .pdf-linea { border-top:1px solid #d1d5db; margin:9px 0 12px; }
-  h1.titulo { text-align:center; font-family:Georgia,'Times New Roman',serif; font-size:28pt; font-weight:700; letter-spacing:1px; color:#111; margin:0; }
-  table { width:100%; border-collapse:collapse; table-layout:fixed; }
-  thead th { background:#e5e7eb; color:#374151; font-size:9pt; font-weight:700; padding:6px 0; text-align:center; border:1px solid #9ca3af; }
-  td { border:1px solid #9ca3af; vertical-align:top; padding:6px 7px; height:86px; background:#fff; }
-  td.vacio { background:#fff; }
-  .num { font-size:8pt; font-weight:700; color:#6b7280; margin-bottom:4px; }
-  .p-med { font-size:8pt; font-weight:700; color:#000; line-height:1.6; margin-bottom:4px; }
-  .p-hora { font-weight:400; color:#374151; font-size:7pt; }
-  .a-med { font-size:7.5pt; font-weight:600; color:#b45309; line-height:1.6; margin-bottom:4px; }
-  .pen-med { font-size:7.5pt; font-weight:700; color:#c0271e; line-height:1.6; margin-bottom:4px; }
-  .a-hora { font-weight:400; color:#b45309; font-size:6.5pt; }
-  .pen-hora { font-weight:400; color:#c0271e; font-size:6.5pt; }
-  /* Franja de turno sin cubrir: una sola línea discreta, bajo los 20px de alto */
-  .pen-band { background:#fef2f2; border-left:3px solid #dc2626; padding:2px 5px; margin-bottom:2px;
-              font-size:7.5pt; font-weight:600; color:#dc2626; line-height:1.25; }
-  .pen-sep { border-top:1px solid #e5e7eb; margin:3px 0; }
-  td.solo-pendiente { background:#fef2f2; }
-  /* Tablas de secciones extra (ausencias / historial) */
-  .bloque-pagina { page-break-before: always; break-before: page; }
-  .nov-sep { border-top:1px solid #d1d5db; margin:18px 0; }
-  .sec-tit { font-size:11pt; font-weight:700; color:#111; margin:0 0 3px; }
-  .sec-sub { font-size:8.5pt; color:#6b7280; margin-bottom:7px; }
-  table.sec { width:100%; border-collapse:collapse; font-size:8.5pt; table-layout:auto; }
-  table.sec th { background:#e5e7eb; border:1px solid #9ca3af; padding:4px 8px; text-align:left; font-size:8pt; }
-  table.sec td { border:1px solid #cbd5e1; padding:4px 8px; height:auto; vertical-align:top; }
-  .notas-wrap { margin-top:18px; }
-  .notas-titulo { font-size:12pt; font-weight:700; color:#111; margin-bottom:6px; border-bottom:1px solid #9ca3af; padding-bottom:4px; }
-  .notas-cuerpo { font-size:9pt; color:#374151; line-height:1.5; white-space:pre-wrap; }
-</style></head><body>
-${(function(){
-  const c = state.config || {};
-  const logo = cargarLogo();
-  // El logo va absoluto arriba a la derecha: así el título queda centrado respecto
-  // de la hoja, haya logo o no, y sin reservar espacio cuando no lo hay.
-  return `<div class="pdf-head">
-    ${logo ? `<img class="pdf-logo" src="${escAttr(logo)}" alt="">` : ""}
-    ${c.institucion ? `<div class="pdf-inst">${escHTML(c.institucion)}</div>` : ""}
-    ${c.servicio ? `<div class="pdf-servicio">${escHTML(c.servicio)}</div>` : ""}
-    ${c.coordinador ? `<div class="pdf-coord">${escHTML(c.coordinador)}</div>` : ""}
-    <div class="pdf-linea"></div>
-    <h1 class="titulo">${MESES[state.mes].toUpperCase()} ${state.anio}</h1>
-  </div>`;
-})()}
-${opt.planilla ? `<table>
-  <thead><tr>${["L","M","M","J","V","S","D"].map(d=>`<th>${d}</th>`).join("")}</tr></thead>
-  <tbody>${filas.join("\n")}</tbody>
-</table>` : ""}
-${horasPDF}
-${novedadesPDF}
-</body></html>`;
-
-  // CAMBIO 2: abrir en nueva ventana y disparar el diálogo de impresión/PDF
   const win = window.open("", "_blank");
   if (!win) {
     alert("El navegador bloqueó la ventana emergente. Permití las ventanas emergentes para generar el PDF.");
@@ -3774,8 +4174,7 @@ ${novedadesPDF}
   win.document.write(html);
   win.document.close();
   win.focus();
-  // Esperar a que el contenido se renderice antes de imprimir
-  const lanzarPrint = () => { try { win.focus(); win.print(); } catch(e) {} };
+  const lanzarPrint = () => { try { win.focus(); win.print(); } catch (e) {} };
   if (win.document.readyState === "complete") {
     setTimeout(lanzarPrint, 350);
   } else {
@@ -4034,7 +4433,7 @@ function generarPDFReporteRRHH() {
 
 function exportarReporteRRHH(filasEditadas, periodo) {
   const cfg = state.config || {};
-  const logo = cargarLogo();
+  const logo = logoSeguro();   // mismo criterio que la planilla: sólo imagen embebida
   const per = perNorm(periodo || perDefecto());
   const filas = (filasEditadas && filasEditadas.length) ? filasEditadas : datosReporteRRHH(per);
   const tot = filas.reduce((t, x) => ({
