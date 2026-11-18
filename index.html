@@ -143,6 +143,10 @@ button { font-family: inherit; cursor: pointer; }
 
 /* MODAL BASE */
 .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 300; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.ayuda-cuerpo { font-size: 0.79rem; line-height: 1.55; color: #374151; }
+.ayuda-cuerpo p { margin: 0 0 8px; }
+.ayuda-cuerpo b { color: #111827; }
+.ayuda-cuerpo code { background: #f3f4f6; border-radius: 4px; padding: 1px 4px; font-size: 0.74rem; }
 .modal-box { background: #fff; border-radius: 14px; padding: 24px; width: 100%; box-shadow: 0 4px 24px rgba(0,0,0,0.18); max-height: 90vh; overflow-y: auto; }
 /* Modal con cuerpo scrolleable: los botones de acción nunca quedan fuera de pantalla */
 .modal-scroll { display: flex; flex-direction: column; max-height: 88vh; overflow: hidden; }
@@ -343,6 +347,9 @@ let state = {
   borradorPendiente: null,// borrador sin confirmar del mes abierto: { ts, dias }
   borradorEnUso: false,   // en pantalla está el borrador, no lo último confirmado
   modalCopias: null,      // { anio, mes } — versiones anteriores del mes
+  modalAyuda: null,       // tema de ayuda abierto
+  tabsAbiertas: 1,        // pestañas de GuardiaSync vivas (latido en localStorage)
+  pisadoPorOtraPestana: null,  // otra pestaña escribió el mes que está en pantalla
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────
@@ -617,6 +624,15 @@ function guardarEstado(opts) {
       alert("🔒 " + etiquetaMes(state.anio, state.mes) + " está cerrado: el cambio NO se guardó.\n\n" +
         "Abrí el candado (el botón 🔒 al lado del nombre del mes) para poder editarlo.");
       return false;
+    }
+    /* Otra pestaña escribió este mes mientras lo tenía abierto. No hay forma de fusionar dos
+       versiones de un mes, así que la única salida honesta es preguntar: el que guarda pisa al
+       otro, y conviene que sea una decisión y no un accidente. */
+    if (state.pisadoPorOtraPestana) {
+      if (!confirm("⚠️ Otra pestaña modificó " + etiquetaMes(state.anio, state.mes) + " mientras lo tenías abierto acá.\n\n" +
+        "Si guardás, tu versión REEMPLAZA la de la otra pestaña.\n\n" +
+        "Cancelá y tocá «Recargar el mes» si querés ver primero lo que hizo la otra.\n\n¿Guardar igual?")) return false;
+      state.pisadoPorOtraPestana = null;
     }
     /* Lo que se edita con el candado abierto va al BORRADOR. Lo confirmado sólo se mueve al
        cerrar el candado, así que un mes terminado no puede quedar roto por lo que pase después. */
@@ -1452,6 +1468,8 @@ function renderCalendario() {
             <div class="menu-sep"></div>
             <button class="menu-item" onclick="accionMenu(exportarMesJSON)">📤 Exportar mes</button>
             <button class="menu-item" onclick="menuImportarMes(event)">📥 Importar mes</button>
+            <div class="menu-sep"></div>
+            <button class="menu-item" onclick="abrirAyuda('guardado')" title="Cómo se guarda, qué es el candado, cómo restaurar">❔ Cómo funciona</button>
             ` : ""}
           </div>` : ""}
         </div>
@@ -1460,6 +1478,7 @@ function renderCalendario() {
     </div>
 
     ${renderProtoResumen()}
+    ${renderAvisoPestanas()}
     ${renderBannersMes()}
     ${state.copiarDiaOrigen ? `<div style="background:#eff6ff;border:1px solid #2563eb;border-radius:8px;padding:10px 14px;margin-bottom:10px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
@@ -1492,7 +1511,10 @@ function renderCalendario() {
     </div>
 
     <div class="notas-panel">
-      <div class="notas-panel-title">📝 Notas del mes</div>
+      <div class="notas-panel-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <span>📝 Notas del mes</span>
+        <button class="btn btn-secondary btn-sm" onclick="abrirAyuda('guardado')" title="¿Dónde se guarda todo esto?">i</button>
+      </div>
       <textarea rows="4" ${mesEditable() ? "" : "readonly"} placeholder="Escribí notas, recordatorios o comentarios para ${MESES[state.mes]} ${state.anio}..." oninput="guardarNotasMes(this.value)">${escHTML(cargarNotasMes())}</textarea>
     </div>`;
 }
@@ -2148,7 +2170,10 @@ function renderModalCopias() {
     <div class="modal-box" style="max-width:520px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
         <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">🕑 Versiones anteriores de ${escHTML(et)}</div>
-        <button onclick="cerrarCopias()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+        <span style="display:flex;gap:6px;align-items:center">
+          <button class="btn btn-secondary btn-sm" onclick="abrirAyuda('copias')" title="¿Cómo funcionan las copias?">i</button>
+          <button onclick="cerrarCopias()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+        </span>
       </div>
       <div style="font-size:0.72rem;color:#6b7280;margin-bottom:12px">
         La app guarda las últimas ${SNAP_MAX} copias de cada mes, antes de cada acción que lo reescribe.
@@ -2168,7 +2193,10 @@ function renderBannersMes() {
   if (mesCerrado(state.anio, state.mes)) {
     html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#f0fdf4;border:1px solid #16a34a;border-radius:8px;padding:9px 14px;margin-bottom:10px">
       <span style="font-size:0.8rem;color:#166534;font-weight:600">🔒 ${escHTML(et)} está confirmado y protegido. Para cambiar algo, abrí el candado.</span>
-      <button class="btn btn-secondary btn-sm" onclick="candadoAbrir()">🔓 Abrir para editar</button>
+      <span style="display:flex;gap:6px">
+        <button class="btn btn-secondary btn-sm" onclick="abrirAyuda('candado')" title="¿Qué es el candado?">i</button>
+        <button class="btn btn-secondary btn-sm" onclick="candadoAbrir()">🔓 Abrir para editar</button>
+      </span>
     </div>`;
   }
   if (state.borradorPendiente) {
@@ -2177,6 +2205,7 @@ function renderBannersMes() {
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
         <span style="font-size:0.82rem;color:#92400e;font-weight:700">✏️ Hay un borrador sin confirmar de ${escHTML(et)}, del ${escHTML(fmtFechaHora(b.ts))} (${b.dias} día${b.dias !== 1 ? "s" : ""} con guardias).</span>
         <span style="display:flex;gap:6px">
+          <button class="btn btn-secondary btn-sm" onclick="abrirAyuda('borrador')" title="¿Qué es el borrador?">i</button>
           <button class="btn btn-primary btn-sm" onclick="borradorRecuperar()">Recuperar borrador</button>
           <button class="btn btn-secondary btn-sm" onclick="borradorDescartar()">Descartar</button>
         </span>
@@ -2190,6 +2219,232 @@ function renderBannersMes() {
     </div>`;
   }
   return html;
+}
+
+// ─── PESTAÑAS ABIERTAS Y SINCRONIZACIÓN ──────────────────────
+/* Dos pestañas de GuardiaSync escriben en el mismo almacenamiento, y cada guardado escribe el
+   MES ENTERO. Si cargás guardias en una y después la otra guarda cualquier cosa, la segunda
+   pisa todo lo de la primera, porque tiene en memoria el mes como estaba cuando lo abrió.
+   No hay forma de fusionar dos versiones de un mes, así que lo único honesto es avisar:
+   un latido en localStorage para contar las pestañas vivas, y el evento `storage` —que llega
+   sólo a las OTRAS pestañas— para saber que alguien tocó el mes que estoy mirando. */
+const TABS_KEY = "guardias_tabs";
+const TAB_ID = "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+/* El latido es lento y la ventana de vida larga a propósito, con margen para algo que NO se
+   puede probar acá: Chrome estrangula los temporizadores de una pestaña oculta a uno por
+   minuto, y una pestaña olvidada en otra ventana —justo la peligrosa— está oculta. Con 12 s de
+   vida se daría por muerta y el aviso no aparecería nunca; con 150 s entra cómoda incluso
+   latiendo una vez por minuto. El costo va para el otro lado: una pestaña que se cierra de
+   golpe, sin pasar por beforeunload, queda fantasma hasta 150 s. Un aviso de más es barato;
+   uno de menos cuesta un mes de guardias.
+   Ojo al probar dos pestañas: la sesión vive en sessionStorage, que es POR PESTAÑA, así que la
+   segunda arranca en la pantalla de ingreso y no late hasta que alguien entra. Una segunda
+   pestaña que "no aparece" en el registro puede ser sólo eso. */
+const TAB_LATIDO_MS = 20000;
+const TAB_VIDA_MS = 150000;
+
+function tabsLeer() {
+  try {
+    const o = JSON.parse(localStorage.getItem(TABS_KEY));
+    return (o && typeof o === "object" && !Array.isArray(o)) ? o : {};
+  } catch (e) { return {}; }
+}
+function tabsVivas(o) {
+  const ahora = Date.now();
+  return Object.keys(o || {}).filter(k => ahora - Number(o[k]) <= TAB_VIDA_MS);
+}
+/* Redibujar desde un temporizador es peligroso: render() reconstruye todo el DOM y el cursor
+   se pierde. Si el jefe está tipeando en las notas del mes o en un prototipo, se espera: el
+   número ya quedó en el estado y el cartel aparece en el próximo dibujado. */
+function tabsRefrescar(n) {
+  if (n === state.tabsAbiertas) return;
+  state.tabsAbiertas = n;
+  const act = document.activeElement;
+  if (act && (act.tagName === "TEXTAREA" || act.tagName === "INPUT" || act.isContentEditable)) return;
+  render();
+}
+function tabsLatir() {
+  if (state.compartido) return;
+  try {
+    const o = tabsLeer();
+    Object.keys(o).forEach(k => { if (Date.now() - Number(o[k]) > TAB_VIDA_MS) delete o[k]; });
+    o[TAB_ID] = Date.now();
+    localStorage.setItem(TABS_KEY, JSON.stringify(o));
+    tabsRefrescar(Object.keys(o).length);
+  } catch (e) {}
+}
+function tabsSalir() {
+  try {
+    const o = tabsLeer();
+    delete o[TAB_ID];
+    localStorage.setItem(TABS_KEY, JSON.stringify(o));
+  } catch (e) {}
+}
+
+// Vuelve a leer el mes del disco, descartando lo que haya en memoria.
+function recargarMesDesdeDisco() {
+  state.pisadoPorOtraPestana = null;
+  const clave = `${state.anio}-${state.mes}`;
+  delete state.historialMeses[clave];
+  const r = abrirMes(state.anio, state.mes);
+  avisarApertura(state.anio, state.mes, r);
+  if (r.estado === "ok") {
+    state.calendario = r.cal;
+    state.historialMeses[clave] = r.cal;
+  } else if (r.estado === "vacio") {
+    state.calendario = generarMesVacio(state.anio, state.mes);
+  }
+  resolverBorradorAlAbrir();
+  /* "Recargar el mes" quiere decir "mostrame lo que hay AHORA", y si hay borrador, lo que hay
+     ahora ES el borrador: es lo último que escribió la otra pestaña. Dejar lo confirmado con un
+     cartel al lado mostraría un mes que no es el de ninguna de las dos pestañas. */
+  if (state.borradorPendiente) {
+    const b = borradorLeer(state.anio, state.mes);
+    if (b && calEsDelMes(b, state.anio, state.mes)) {
+      state.calendario = b;
+      state.historialMeses[clave] = b;
+      state.borradorPendiente = null;
+      state.borradorEnUso = true;
+    }
+  }
+  protoLimpiarRevision();
+  protoLimpiarModos();
+  render();
+}
+function ignorarOtraPestana() { state.pisadoPorOtraPestana = null; render(); }
+
+function initSincroPestanas() {
+  if (state.compartido) return;
+  try {
+    window.addEventListener("storage", ev => {
+      if (!ev || !ev.key) return;
+      if (ev.key === TABS_KEY) { tabsRefrescar(tabsVivas(tabsLeer()).length); return; }
+      // ¿Tocaron EL MES que tengo en pantalla?
+      const mias = [calKey(state.anio, state.mes), borradorKey(state.anio, state.mes), bloqKey(state.anio, state.mes)];
+      if (mias.indexOf(ev.key) < 0) return;
+      state.pisadoPorOtraPestana = { ts: Date.now(), confirmado: ev.key === calKey(state.anio, state.mes) };
+      const act = document.activeElement;
+      if (act && (act.tagName === "TEXTAREA" || act.tagName === "INPUT" || act.isContentEditable)) return;
+      render();
+    });
+    window.addEventListener("beforeunload", tabsSalir);
+    // Una pestaña congelada no late; al volver a ella sí, y es justo cuando puede pisar el mes.
+    window.addEventListener("focus", tabsLatir);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) tabsLatir(); });
+  } catch (e) {}
+  tabsLatir();
+  try { setInterval(tabsLatir, TAB_LATIDO_MS); } catch (e) {}
+}
+
+function renderAvisoPestanas() {
+  if (state.compartido || !state.jefe) return "";
+  let html = "";
+  if (Number(state.tabsAbiertas) > 1) {
+    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#fef2f2;border:2px solid #dc2626;border-radius:8px;padding:9px 14px;margin-bottom:10px">
+      <span style="font-size:0.8rem;color:#991b1b;font-weight:700">⚠️ Hay ${numId(state.tabsAbiertas)} pestañas de GuardiaSync abiertas. Cada guardado escribe el mes entero, así que una puede pisar lo que cargaste en la otra. Dejá una sola.</span>
+      <button class="btn btn-secondary btn-sm" onclick="abrirAyuda('pestanas')" title="¿Por qué?">i</button>
+    </div>`;
+  }
+  if (state.pisadoPorOtraPestana) {
+    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:#fef2f2;border:2px solid #dc2626;border-radius:8px;padding:9px 14px;margin-bottom:10px">
+      <span style="font-size:0.8rem;color:#991b1b;font-weight:700">⚠️ Otra pestaña acabó de modificar ${escHTML(etiquetaMes(state.anio, state.mes))}${state.pisadoPorOtraPestana.confirmado ? " (lo confirmado)" : ""}. Lo que ves acá puede estar viejo.</span>
+      <span style="display:flex;gap:6px">
+        <button class="btn btn-primary btn-sm" onclick="recargarMesDesdeDisco()">Recargar el mes</button>
+        <button class="btn btn-secondary btn-sm" onclick="ignorarOtraPestana()">Seguir con lo mío</button>
+      </span>
+    </div>`;
+  }
+  return html;
+}
+
+// ─── AYUDA EN CRIOLLO ────────────────────────────────────────
+function abrirAyuda(tema) { state.modalAyuda = tema || "guardado"; state.menuToolbar = false; render(); }
+function cerrarAyuda() { state.modalAyuda = null; render(); }
+/* Toma el ÍNDICE del tema, no su nombre: el nombre habría que interpolarlo dentro del
+   onclick, y ahí escapar no sirve —el parser decodifica la entidad ANTES de compilar el
+   handler—. Un número saneado no tiene esa salida. */
+function ayudaIr(i) { const s = AYUDA_TEMAS[Number(i)]; if (!s) return; state.modalAyuda = s.id; render(); }
+
+const AYUDA_TEMAS = [
+  { id: "guardado", t: "💾 Dónde se guardan las guardias", cuerpo: `
+    <p>Todo vive <b>en este navegador y en este dispositivo</b>. No hay servidor: nada se sube a ninguna parte y nadie más ve lo que cargás.</p>
+    <p><b>Lo bueno:</b> funciona sin internet y los datos no salen de acá.</p>
+    <p><b>Lo que hay que tener en cuenta:</b> si abrís GuardiaSync en otro teléfono o en otra computadora, <b>ahí está vacía</b> — son dos copias distintas que no se hablan. Y si se borran los datos del navegador, se van las guardias con ellos.</p>
+    <p>Para pasar un mes de un dispositivo a otro: <b>≡ → 📤 Exportar mes</b> en uno, <b>≡ → 📥 Importar mes</b> en el otro.</p>` },
+
+  { id: "candado", t: "🔒 El candado del mes", cuerpo: `
+    <p>Cada mes tiene su candado, al lado del nombre del mes.</p>
+    <p><b>🔓 Borrador</b> — estás editando. Todo lo que cambiás se guarda aparte, como borrador.</p>
+    <p><b>🔒 Cerrado</b> — el mes está confirmado y protegido: los días se abren para mirar pero no para cambiar, y el menú no deja aplicar plantillas ni prototipos. Para volver a editarlo, tocá el candado.</p>
+    <p><b>Cerrar el candado es la única acción que mueve lo confirmado.</b> Es a propósito: un mes terminado no se rompe por algo que pase después.</p>
+    <p>Al abrir y al cerrar el candado se guarda una copia automática del mes.</p>` },
+
+  { id: "borrador", t: "✏️ El borrador", cuerpo: `
+    <p>Con el candado abierto, cada cambio va al <b>borrador</b> del mes, no sobre lo confirmado.</p>
+    <p>Si recargás la página, o te vas a otro mes y volvés, <b>ves lo último que confirmaste</b> y arriba aparece un cartel con el borrador:</p>
+    <p><b>Recuperar borrador</b> lo trae de vuelta. <b>Descartar</b> lo saca — y antes guarda una copia, así que tampoco se pierde.</p>
+    <p><b>El borrador nunca se borra solo.</b> Cuando el mes está como lo querés, cerrás el candado y eso pasa a ser lo confirmado.</p>` },
+
+  { id: "copias", t: "🕑 Restaurar una versión anterior", cuerpo: `
+    <p><b>≡ → 🕑 Restaurar versión anterior.</b></p>
+    <p>La app guarda sola las <b>últimas 6 copias de cada mes</b>, con fecha y hora, antes de cada cosa que lo reescribe: rehacer el mes, aplicar prototipos, aplicar una plantilla, importar, y al abrir o cerrar el candado.</p>
+    <p>Elegís una —dice cuántos días con guardias tenía— y antes de reemplazar lo que hay en pantalla <b>guarda una copia del estado actual</b>: restaurar también se puede deshacer.</p>
+    <p>Lo restaurado queda como borrador: revisalo y cerrá el candado para confirmarlo.</p>
+    <p>Las copias viven en este navegador. Si se borran los datos del navegador, se borran también.</p>` },
+
+  { id: "prototipos", t: "📐 Los prototipos (capas A, B y C)", cuerpo: `
+    <p>Tres capas, de la más general a la más específica:</p>
+    <p><b>A — por día de semana.</b> "Todos los lunes, Quiñones". Es la base del mes.</p>
+    <p><b>B — por semana.</b> Ajustes de una semana puntual: la semana del 9, por ejemplo.</p>
+    <p><b>C — del mes.</b> Días concretos, con fecha.</p>
+    <p><b>Cuando dos capas hablan del mismo día, manda la más específica: C le gana a B, y B le gana a A.</b> Los días que se resuelven por esa regla quedan marcados en ámbar para que los revises.</p>
+    <p>Si un nombre no se reconoce, el día entra como <b>turno pendiente</b> y la app te lo pregunta después, en el cartel de revisión. Cuando lo confirmás una vez, lo aprende para la próxima.</p>
+    <p>Antes de aplicar prototipos se guarda una copia del mes.</p>` },
+
+  { id: "respaldo", t: "📤 Cuándo conviene exportar un respaldo", cuerpo: `
+    <p><b>≡ → 📤 Exportar mes</b> baja un archivo <code>.json</code> con el mes y el equipo. Se vuelve a cargar con <b>≡ → 📥 Importar mes</b>.</p>
+    <p>Conviene hacerlo:</p>
+    <p>· cuando terminaste de armar un mes, antes de cerrar el candado;<br>
+       · antes de importar o de rehacer un mes;<br>
+       · antes de limpiar el navegador o de cambiar de computadora;<br>
+       · cada tanto, si cargás guardias seguido.</p>
+    <p><b>Las copias automáticas no son un respaldo de verdad</b>: viven en el mismo navegador. El archivo exportado es el único que sobrevive a que el navegador se borre.</p>` },
+
+  { id: "datos", t: "🧹 Si se borran los datos del navegador", cuerpo: `
+    <p>Se pierde <b>todo lo de la app en este dispositivo</b>: los meses, el equipo, las copias automáticas, la configuración y las notas. Desde la app no hay forma de recuperarlo.</p>
+    <p><b>Lo que sí sobrevive:</b> los archivos <code>.json</code> que hayas exportado, y los meses publicados con <b>📤 Publicar mes</b>, que quedan guardados en tu cuenta de GitHub.</p>
+    <p>Pasa también sin querer: "limpiar datos de navegación" con la opción de cookies y datos de sitios, navegar en modo privado (al cerrar la ventana no queda nada) y algunos limpiadores automáticos.</p>` },
+
+  { id: "pestanas", t: "⚠️ Dos pestañas abiertas", cuerpo: `
+    <p>Las dos pestañas escriben en el mismo lugar, y <b>cada guardado escribe el mes entero</b>.</p>
+    <p>Si cargás guardias en una y después la otra guarda cualquier cosa, la segunda pisa lo de la primera: tiene en memoria el mes como estaba cuando lo abrió y no sabe que cambió.</p>
+    <p>La app avisa cuando detecta más de una pestaña. <b>Lo más seguro es dejar una sola.</b></p>
+    <p>Si ya cambiaste algo en las dos, aparece el cartel "otra pestaña modificó este mes": tocá <b>Recargar el mes</b> antes de seguir.</p>` },
+];
+
+function renderModalAyuda() {
+  if (!state.modalAyuda) return "";
+  const abierto = state.modalAyuda;
+  const secciones = AYUDA_TEMAS.map((s, i) => {
+    const esta = s.id === abierto;
+    return `<div style="border:1px solid ${esta ? "#1d4ed8" : "#e5e7eb"};border-radius:8px;margin-bottom:7px;overflow:hidden">
+      <button onclick="ayudaIr(${numId(i)})" style="width:100%;text-align:left;background:${esta ? "#eff6ff" : "#fff"};border:none;cursor:pointer;padding:10px 12px;font-size:0.82rem;font-weight:700;color:#111827;display:flex;justify-content:space-between;gap:8px;align-items:center">
+        <span>${s.t}</span><span style="color:#6b7280;font-weight:400">${esta ? "▴" : "▾"}</span>
+      </button>
+      ${esta ? `<div class="ayuda-cuerpo" style="padding:4px 13px 12px">${s.cuerpo}</div>` : ""}
+    </div>`;
+  }).join("");
+
+  return `<div class="modal-bg" onclick="if(event.target===this)cerrarAyuda()">
+    <div class="modal-box" style="max-width:560px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">❔ Cómo funciona GuardiaSync</div>
+        <button onclick="cerrarAyuda()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
+      </div>
+      <div style="font-size:0.72rem;color:#6b7280;margin-bottom:12px">Tocá un tema para abrirlo.</div>
+      <div style="max-height:62vh;overflow:auto">${secciones}</div>
+    </div>
+  </div>`;
 }
 
 // ─── RENDER PRINCIPAL ─────────────────────────────────────────
@@ -2259,6 +2514,7 @@ function render() {
       ${renderModalGist()}
       ${renderModalProto()}
       ${renderModalCopias()}
+      ${renderModalAyuda()}
     </div>`;
 
   // Restaurar filtro médico
@@ -5507,6 +5763,7 @@ function iniciarApp() {
      limpiaba esa marca. También escribía guardias_plantilla_default, que no se lee en ninguna parte. */
   state.config = cargarConfig();
   cargarEstado();
+  initSincroPestanas();
   render();
 }
 
