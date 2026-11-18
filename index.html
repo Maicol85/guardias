@@ -301,10 +301,17 @@ let medicos = [
 
 // ─── ESTADO ──────────────────────────────────────────────────
 
+/* Una sola lectura del reloj: con dos `new Date()` separados, un arranque justo sobre la
+   medianoche del 31 de diciembre podía tomar el año de un lado y el mes del otro. */
+const HOY_AL_ARRANCAR = new Date();
+
 let state = {
   view: "calendario",
-  anio: 2026,
-  mes: 7,
+  /* El mes de HOY, no uno fijo. Arrancar siempre en agosto 2026 obligaba a tocar "Hoy" en cada
+     sesión, y "Hoy" era justamente el botón que cambiaba el mes sin cargarlo: así se vació
+     noviembre 2026. El mes se carga en cargarEstado(), por el mismo camino que irAMes. */
+  anio: HOY_AL_ARRANCAR.getFullYear(),
+  mes: HOY_AL_ARRANCAR.getMonth(),
   calendario: null,
   historialMeses: {},
   filtroMedico: "",
@@ -350,6 +357,7 @@ let state = {
   modalAyuda: null,       // tema de ayuda abierto
   tabsAbiertas: 1,        // pestañas de GuardiaSync vivas (latido en localStorage)
   pisadoPorOtraPestana: null,  // otra pestaña escribió el mes que está en pantalla
+  mesIlegible: null,      // "anio-mes" cuyo guardado está roto: en pantalla hay un mes de mentira
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────
@@ -617,6 +625,7 @@ function mesEnMemoriaOk(accion) {
    escribirCal(), que es la única puerta de escritura de un mes. */
 function guardarEstado(opts) {
   if (state.compartido) return true;   // link compartido: nunca se escribe en el navegador de quien lo abre
+  let salteadoElMes = false;
   if (state.calendario) {
     /* Con el candado cerrado el mes está confirmado y no entra ninguna escritura. Es el último
        control, no el único: los caminos de edición ya preguntan antes (el día se abre en solo
@@ -624,6 +633,14 @@ function guardarEstado(opts) {
     if (mesCerrado(state.anio, state.mes)) {
       alert("🔒 " + etiquetaMes(state.anio, state.mes) + " está cerrado: el cambio NO se guardó.\n\n" +
         "Abrí el candado (el botón 🔒 al lado del nombre del mes) para poder editarlo.");
+      return false;
+    }
+    /* Lo guardado de este mes está ilegible y en pantalla hay un mes en blanco que la app armó
+       para poder dibujar algo. Escribirlo taparía el texto que todavía se puede rescatar. */
+    if (state.mesIlegible === `${state.anio}-${state.mes}`) {
+      alert("⚠️ " + etiquetaMes(state.anio, state.mes) + " NO se guardó.\n\n" +
+        "Lo que está guardado de ese mes no se puede leer, y lo que ves en pantalla es un mes en blanco " +
+        "que la app armó para poder mostrarte algo. Guardarlo taparía lo que todavía se puede rescatar.");
       return false;
     }
     /* Otra pestaña escribió este mes mientras lo tenía abierto. No hay forma de fusionar dos
@@ -637,9 +654,19 @@ function guardarEstado(opts) {
     }
     /* Lo que se edita con el candado abierto va al BORRADOR. Lo confirmado sólo se mueve al
        cerrar el candado, así que un mes terminado no puede quedar roto por lo que pase después. */
-    if (!borradorGuardar(state.anio, state.mes, state.calendario, opts)) return false;
-    state.borradorEnUso = true;
-    state.borradorPendiente = null;
+    /* Un mes en blanco que todavía no existe en ninguna parte no crea su clave. Antes, abrir la
+       app y navegar una vez dejaba sembrado un mes vacío que después no se distinguía de uno
+       cargado: el modal para armarlo no volvía a aparecer nunca. */
+    const hayAlgoGuardado = leerCalClave(calKey(state.anio, state.mes)).estado === "ok" ||
+                            !!borradorLeer(state.anio, state.mes);
+    if (!tieneAsigs(state.calendario) && !hayAlgoGuardado) {
+      state.historialMeses[`${state.anio}-${state.mes}`] = state.calendario;
+      salteadoElMes = true;   // ojo: el EQUIPO sí se sigue guardando, es global y no del mes
+    } else {
+      if (!borradorGuardar(state.anio, state.mes, state.calendario, opts)) return false;
+      state.borradorEnUso = true;
+      state.borradorPendiente = null;
+    }
   }
   try { localStorage.setItem("guardias_medicos", JSON.stringify(medicos)); }
   catch (e) {
@@ -647,7 +674,7 @@ function guardarEstado(opts) {
     alert("⚠️ No se pudo guardar el equipo en este navegador (almacenamiento lleno).");
     return false;
   }
-  toastGuardado();
+  if (!salteadoElMes) toastGuardado();   // no decir "guardado" cuando no se escribió el mes
   return true;
 }
 
@@ -659,24 +686,40 @@ function cargarEstado() {
       if (Array.isArray(arr) && arr.length) medicos = arr;
     }
   } catch(e) {}
-  /* El mes se abre por abrirMes(), que distingue "no hay nada guardado" de "lo guardado está
-     roto" y limpia las fechas de otro mes que el bug de "Hoy" pudo dejar mezcladas. Antes un
-     JSON dañado dejaba en memoria el mes por defecto SIN avisar, y el primer guardado lo
-     escribía encima del texto que todavía se podía leer a mano. */
+  /* El mes de hoy se abre por abrirMes(), el mismo camino que irAMes: distingue "no hay nada
+     guardado" de "lo guardado está roto", respeta el candado y el borrador, y limpia las fechas
+     de otro mes que el bug de "Hoy" pudo dejar mezcladas. */
+  state.mesIlegible = null;
   const r = abrirMes(state.anio, state.mes);
   avisarApertura(state.anio, state.mes, r);
+
   if (r.estado === "ok") {
     state.calendario = r.cal;
     state.historialMeses[`${state.anio}-${state.mes}`] = r.cal;
     resolverBorradorAlAbrir();
     return;
   }
-  if (r.estado === "vacio") resolverBorradorAlAbrir();   // puede no haber nada confirmado y sí un borrador
+
   if (r.estado === "danado" || r.estado === "error") {
+    /* No se abre el mes y NO se escribe nada encima. En pantalla va un mes en blanco sólo para
+       poder dibujar algo, marcado como ilegible: mientras lo esté, guardarEstado() se niega, así
+       que ese calendario de mentira no puede terminar en el disco ni taparle el lugar al texto
+       que todavía se puede rescatar a mano. */
+    state.calendario = generarMesVacio(state.anio, state.mes);
+    state.mesIlegible = `${state.anio}-${state.mes}`;
     alert("⚠️ " + etiquetaMes(state.anio, state.mes) + " está guardado pero no se puede leer (" + r.motivo + ").\n\n" +
       "No se va a escribir nada encima. Lo que se ve en pantalla NO son tus guardias de ese mes: " +
       "exportá un respaldo de los demás meses antes de seguir tocando la app.");
+    return;
   }
+
+  // Vacío. Puede haber un borrador sin confirmar: ése ES el mes, porque no hay a dónde volver.
+  resolverBorradorAlAbrir();
+  if (state.calendario && Object.keys(state.calendario).length) return;
+  /* Y si no hay nada de nada, se ofrece armarlo con el modal de siempre. No se dibuja un mes
+     vacío sin decir de qué se trata, y no se escribe hasta que se elige. */
+  state.calendario = generarMesVacio(state.anio, state.mes);
+  prepararArmarMes();
 }
 
 function generarMesVacio(anio, mes) {
@@ -714,7 +757,6 @@ function aplicarPatronMes(anio, mes) {
   }
   return cal;
 }
-function cargarAgosto2026() { return aplicarPatronMes(2026, 7); }
 
 // ─── CONFIGURACIÓN DEL SERVICIO (localStorage "guardias_config") ──
 // turnos: { [dow base-lunes 0=Lun…6=Dom]: [ {id, rol, nombre, horario, requeridos} ] }
@@ -1146,6 +1188,22 @@ function generarMesDesdeConfig(anio, mes) {
 // ─── CAMBIO 4: PATRÓN POR DÍA DE SEMANA DESDE UN MES REAL ────
 const DOW_NOMBRE = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"];   // base-lunes 0=Lun … 6=Dom
 
+/* ¿Hay alguna asignación, aunque sea un turno pendiente? Un mes recién generado en memoria
+   —todos los días presentes, ninguno con nada— NO es un mes armado. Si contara como armado,
+   volver a él saltearía el modal y, peor, se guardaría una clave de un mes en blanco que
+   después no se distingue de uno cargado. */
+function tieneAsigs(cal) {
+  return Object.keys(cal || {}).some(f => ((((cal || {})[f] || {}).asignaciones) || []).length > 0);
+}
+
+// Abre el modal de siempre para construir un mes, con el mes anterior como base.
+function prepararArmarMes() {
+  const anioOrigen = state.mes === 0 ? state.anio - 1 : state.anio;
+  const mesOrigen  = state.mes === 0 ? 11 : state.mes - 1;
+  state.modalCopiar = { anioNuevo: state.anio, mesNuevo: state.mes, anioOrigen, mesOrigen };
+}
+function armarMes() { prepararArmarMes(); render(); }
+
 // Calendario de un mes: primero el que está en memoria, si no el guardado en localStorage.
 function calDelMes(anio, mes) {
   const enMemoria = state.historialMeses[`${anio}-${mes}`];
@@ -1203,9 +1261,6 @@ function aplicarPatronDesdeCal(anio, mes, calOrigen) {
   }
   return cal;
 }
-
-state.calendario = cargarAgosto2026();
-state.historialMeses["2026-7"] = state.calendario;
 
 function diaData(fecha) {
   return state.calendario[fecha] || {asignaciones:[], notas:""};
@@ -2194,10 +2249,33 @@ function renderModalCopias() {
 }
 
 // ─── BANNERS DEL MES (candado, borrador) ─────────────────────
+/* Un mes en pantalla sin una sola guardia tiene que decir por qué: dibujarlo vacío y callado es
+   exactamente lo que pasaba cuando se perdió noviembre. */
+function mesSinArmar() {
+  if (state.compartido || state.modalCopiar) return false;
+  if (state.mesIlegible === `${state.anio}-${state.mes}`) return false;   // ése tiene su propio cartel
+  return !!state.calendario && !tieneAsigs(state.calendario);
+}
+
 function renderBannersMes() {
   if (state.compartido || !state.jefe) return "";
   const et = etiquetaMes(state.anio, state.mes);
   let html = "";
+
+  if (state.mesIlegible === `${state.anio}-${state.mes}`) {
+    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#fef2f2;border:2px solid #dc2626;border-radius:8px;padding:9px 14px;margin-bottom:10px">
+      <span style="font-size:0.8rem;color:#991b1b;font-weight:700">⚠️ Lo guardado de ${escHTML(et)} no se puede leer. Esto es un mes en blanco, NO son tus guardias — y no se va a escribir nada encima.</span>
+      <button class="btn btn-secondary btn-sm" onclick="abrirAyuda('respaldo')" title="¿Qué hago?">i</button>
+    </div>`;
+  } else if (mesSinArmar()) {
+    html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#eff6ff;border:1px solid #2563eb;border-radius:8px;padding:9px 14px;margin-bottom:10px">
+      <span style="font-size:0.8rem;color:#1e40af;font-weight:600">📭 ${escHTML(et)} todavía no tiene guardias cargadas.</span>
+      <span style="display:flex;gap:6px">
+        <button class="btn btn-secondary btn-sm" onclick="abrirAyuda('guardado')" title="¿Dónde se guardan las guardias?">i</button>
+        <button class="btn btn-primary btn-sm" onclick="armarMes()">Armar el mes</button>
+      </span>
+    </div>`;
+  }
 
   if (mesCerrado(state.anio, state.mes)) {
     html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:#f0fdf4;border:1px solid #16a34a;border-radius:8px;padding:9px 14px;margin-bottom:10px">
@@ -3499,10 +3577,11 @@ function irAMes(anioNuevo, mesNuevo) {
   /* 1. El mes que se deja. Se guarda SÓLO si el calendario en memoria pertenece a ese mes: si
      no, se descarta en vez de escribirlo. El disco manda, porque lo que hay en memoria en ese
      caso es el calendario de otro mes y guardarlo es exactamente lo que destruía el mes. */
-  if (mesCerrado(state.anio, state.mes)) {
+  if (mesCerrado(state.anio, state.mes) || state.mesIlegible === `${state.anio}-${state.mes}`) {
     /* Mes cerrado: no hay nada que guardar —no se pudo editar— y avisarlo en cada navegación
-       sería ruido puro. */
-    state.historialMeses[`${state.anio}-${state.mes}`] = state.calendario;
+       sería ruido puro. Mes ilegible: lo que hay en pantalla es un mes de mentira y guardarlo
+       taparía el texto original; en los dos casos se navega sin escribir. */
+    if (!state.mesIlegible) state.historialMeses[`${state.anio}-${state.mes}`] = state.calendario;
   } else if (state.calendario && !calEsDelMes(state.calendario, state.anio, state.mes)) {
     const aj = clavesAjenas(state.calendario, state.anio, state.mes);
     alert("⚠️ " + etiquetaMes(state.anio, state.mes) + " NO se guardó.\n\nEl calendario que había en memoria tiene " +
@@ -3524,6 +3603,7 @@ function irAMes(anioNuevo, mesNuevo) {
     return;
   }
   if (r.estado === "ok") {
+    state.mesIlegible = null;
     state.calendario = r.cal;
     state.historialMeses[clave] = r.cal;
     state.anio = anioNuevo;
@@ -3533,7 +3613,8 @@ function irAMes(anioNuevo, mesNuevo) {
     return;
   }
   // Vacío: lo que haya en memoria de ese mes y, si no hay nada, el modal para construirlo.
-  if (state.historialMeses[clave] && Object.keys(state.historialMeses[clave]).length) {
+  if (tieneAsigs(state.historialMeses[clave])) {
+    state.mesIlegible = null;
     state.calendario = state.historialMeses[clave];
     state.anio = anioNuevo;
     state.mes = mesNuevo;
@@ -3545,6 +3626,7 @@ function irAMes(anioNuevo, mesNuevo) {
      borrador y el cartel avisa que está sin confirmar. */
   const bor = borradorLeer(anioNuevo, mesNuevo);
   if (bor && calEsDelMes(bor, anioNuevo, mesNuevo)) {
+    state.mesIlegible = null;
     state.calendario = bor;
     state.historialMeses[clave] = bor;
     state.anio = anioNuevo;
@@ -3565,7 +3647,9 @@ function irAMes(anioNuevo, mesNuevo) {
 // preguntar: ahí se vuelve a guardar lo que sigue en memoria para no perder las guardias.
 function cancelarCopiaMes() {
   state.modalCopiar = null;
-  if (state.calendario) {
+  // Sólo se re-guarda si hay algo que guardar: cancelar en el arranque no tiene que sembrar
+  // la clave de un mes en blanco.
+  if (tieneAsigs(state.calendario)) {
     state.historialMeses[`${state.anio}-${state.mes}`] = state.calendario;
     guardarEstado();
   }
