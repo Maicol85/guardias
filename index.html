@@ -317,6 +317,7 @@ let state = {
   nuevoMedico: { nombre:"", sigla:"", color:"#1d4ed8" },
   config: null,           // configuración del servicio (se carga en initPatronDefault)
   modalPDF: null,         // opciones de exportación de PDF elegidas en el modal
+  statsPeriodo: null,     // período elegido en la pestaña Estadísticas
   menuToolbar: false,     // menú "≡" de la toolbar desplegado
   leyendaGrupo: null,     // grupo de la leyenda desplegado (acordeón); null = todos colapsados
   compartido: false,      // true al abrir un link ?share= : solo lectura, sin persistencia
@@ -932,20 +933,6 @@ function turnosPendientesMes() {
     (n, f) => n + (diaData(f).asignaciones || []).filter(esPendiente).length, 0);
 }
 
-function getStats() {
-  const s = {};
-  medicos.forEach(m => { s[m.id] = {total:0, D12:0, N12:0, apoyo:0}; });
-  Object.values(state.calendario).forEach(dia => {
-    dia.asignaciones.forEach(a => {
-      if(!s[a.medicoId]) return;
-      s[a.medicoId].total++;
-      if(a.rol==="D12") s[a.medicoId].D12++;
-      else if(a.rol==="N12") s[a.medicoId].N12++;
-      else s[a.medicoId].apoyo++;
-    });
-  });
-  return s;
-}
 
 // ─── ORDEN DE ASIGNACIONES (CAMBIO 1) ────────────────────────
 // Hora de entrada: solo si el horario es un rango tipo "8-20", "08–20 hs", "07-19hs".
@@ -1408,49 +1395,38 @@ function renderEquipo() {
 
 // ─── RENDER ESTADÍSTICAS ─────────────────────────────────────
 function renderEstadisticas() {
-  const stats = getStats();
-  const filasHTML = medicos.map((m,i) => {
-    const s = stats[m.id]||{total:0,D12:0,N12:0,apoyo:0};
-    if(s.total===0 && i>0) return "";
-    return `<div class="stats-row" style="background:${i%2===0?'#fff':'#fafafa'}">
-      <div class="stats-td" style="display:flex;align-items:center;gap:8px">
-        ${renderAvatar(m,28)}
-        <span style="font-size:0.83rem;font-weight:600;color:#111827">${m.nombre}</span>
-      </div>
-      <div class="stats-td"><span style="font-family:Georgia,serif;font-size:1.3rem;color:${m.color};font-weight:700">${s.total}</span></div>
-      <div class="stats-td"><span style="font-family:Georgia,serif;font-size:1rem;color:#374151;font-weight:500">${s.D12}</span></div>
-      <div class="stats-td"><span style="font-family:Georgia,serif;font-size:1rem;color:#374151;font-weight:500">${s.N12}</span></div>
-      <div class="stats-td"><span style="font-family:Georgia,serif;font-size:1rem;color:#374151;font-weight:500">${s.apoyo}</span></div>
-    </div>`;
-  }).join("");
+  const p = perRef("stats");
+  const ag = perValido(p) ? perAgregar(p) : { filas: [], meses: [], sinDatos: [] };
+  const filas = ag.filas;
+  const et = escHTML(perEtiqueta(p));
+  const vacio = '<div style="padding:14px;text-align:center;color:#6b7280;font-size:0.82rem">Sin guardias cargadas en el período.</div>';
 
-  // MEJORA 9: resumen de horas por médico
-  const rh = resumenHoras();
-  const horasFilas = rh.length
-    ? rh.map((x,i) => `<div class="stats-row" style="background:${i%2===0?'#fff':'#fafafa'};display:grid;grid-template-columns:2fr 1fr 1fr 1fr">
-        <div class="stats-td" style="display:flex;align-items:center;gap:8px">${renderAvatar(x.medico,26)}<span style="font-size:0.83rem;font-weight:600;color:#111827">${x.medico.nombre}</span></div>
-        <div class="stats-td" style="text-align:center;font-size:0.83rem">${x.guardias}</div>
-        <div class="stats-td" style="text-align:center;font-size:0.83rem;font-weight:700">${x.horas} h</div>
-        <div class="stats-td" style="text-align:center;font-size:0.83rem;color:#6b7280">${x.promedio.toFixed(1)} h</div>
-      </div>`).join("")
-    : `<div style="padding:14px;text-align:center;color:#6b7280;font-size:0.82rem">Sin guardias cargadas este mes.</div>`;
+  const distrib = filas.length ? filas.map((x, i) => '<div class="stats-row" style="background:' + (i % 2 === 0 ? "#fff" : "#fafafa") + '">' +
+      '<div class="stats-td" style="display:flex;align-items:center;gap:8px">' + renderAvatar(x.medico, 28) +
+      '<span style="font-size:0.83rem;font-weight:600;color:#111827">' + escHTML(x.medico.nombre) + '</span></div>' +
+      '<div class="stats-td"><span style="font-family:Georgia,serif;font-size:1.3rem;color:' + escAttr(x.medico.color) + ';font-weight:700">' + x.guardias + '</span></div>' +
+      '<div class="stats-td"><span style="font-family:Georgia,serif;font-size:1rem;color:#374151;font-weight:500">' + x.dia + '</span></div>' +
+      '<div class="stats-td"><span style="font-family:Georgia,serif;font-size:1rem;color:#374151;font-weight:500">' + x.noche + '</span></div>' +
+      '<div class="stats-td"><span style="font-family:Georgia,serif;font-size:1rem;color:#374151;font-weight:500">' + x.apoyo + '</span></div>' +
+    '</div>').join("") : vacio;
 
-  return `
-    <div class="section-title">${MESES[state.mes]} ${state.anio} — Distribución de guardias</div>
-    <div class="card-wrap">
-      <div class="stats-header">
-        ${["Médico","Total","☀️ 08-20","🌙 20-08","+ Apoyo"].map(h=>`<div class="stats-th">${h}</div>`).join("")}
-      </div>
-      ${filasHTML}
-    </div>
+  const horas = filas.length ? filas.map((x, i) => '<div class="stats-row" style="background:' + (i % 2 === 0 ? "#fff" : "#fafafa") + ';display:grid;grid-template-columns:2fr 1fr 1fr 1fr">' +
+      '<div class="stats-td" style="display:flex;align-items:center;gap:8px">' + renderAvatar(x.medico, 26) +
+      '<span style="font-size:0.83rem;font-weight:600;color:#111827">' + escHTML(x.medico.nombre) + '</span></div>' +
+      '<div class="stats-td" style="text-align:center;font-size:0.83rem">' + x.guardias + '</div>' +
+      '<div class="stats-td" style="text-align:center;font-size:0.83rem;font-weight:700">' + fmtH(x.horas) + ' h</div>' +
+      '<div class="stats-td" style="text-align:center;font-size:0.83rem;color:#6b7280">' + fmtH(x.promedio) + ' h</div>' +
+    '</div>').join("") : vacio;
 
-    <div class="section-title" style="margin-top:22px">${MESES[state.mes]} ${state.anio} — Resumen de horas por médico</div>
-    <div class="card-wrap">
-      <div class="stats-header" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr">
-        ${["Médico","Guardias","Horas totales","Promedio"].map(h=>`<div class="stats-th">${h}</div>`).join("")}
-      </div>
-      ${horasFilas}
-    </div>`;
+  return renderSelectorPeriodo("stats") +
+    '<div class="section-title">' + et + ' — Distribución de guardias</div>' +
+    '<div class="card-wrap"><div class="stats-header">' +
+      ["Médico", "Total", "☀️ Día 08-20", "🌙 Noche 20-08", "+ Apoyo"].map(h => '<div class="stats-th">' + h + '</div>').join("") +
+    '</div>' + distrib + '</div>' +
+    '<div class="section-title" style="margin-top:22px">' + et + ' — Resumen de horas por médico</div>' +
+    '<div class="card-wrap"><div class="stats-header" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr">' +
+      ["Médico", "Guardias", "Horas totales", "Promedio"].map(h => '<div class="stats-th">' + h + '</div>').join("") +
+    '</div>' + horas + '</div>';
 }
 
 // ─── RENDER MODAL DÍA ────────────────────────────────────────
@@ -3164,29 +3140,265 @@ function ejecutarSwapMedicos() {
   render();
 }
 
-// ─── MEJORA 9: HORAS POR MÉDICO ──────────────────────────────
-function durationHoras(a) {
-  const s = String(horarioDe(a));
-  const r = s.match(/(\d{1,2})\s*[-–—]\s*(\d{1,2})/);
-  if (r) { let d = ((+r[2]) - (+r[1]) + 24) % 24; return d === 0 ? 24 : d; }
-  const hm = s.match(/(\d{1,2})\s*h/i);
-  return hm ? (+hm[1]) : 0;
+// ─── HORARIOS: UN SOLO LECTOR ────────────────────────────────
+/* Los horarios se escriben de muchas formas en la app y en la plantilla de cobertura:
+   "08–20 hs", "08-20hs", "8-20", "08:00-20:00", "16-22 hs", "08 a 14", "Apoyo 6hs".
+   Todo eso lo lee ESTA función y nadie más. Tener dos lectores —uno para la pantalla y
+   otro para el informe— es cómo un cálculo se podre sin que se note: el PDF no recalcula,
+   toma el valor. Devuelve minutos para no perder los :30. */
+const DIA_INI_MIN = 8 * 60;    // 08:00 — desde acá es día
+const DIA_FIN_MIN = 20 * 60;   // 20:00 — desde acá es noche
+
+function parseHorario(txt) {
+  const s = String(txt == null ? "" : txt).replace(/ /g, " ").trim();
+  if (!s) return { tipo: "nada", dur: 0 };
+  /* Rango con dos extremos. El separador puede ser guion corto, largo, raya o la palabra
+     "a"; el "hs"/"h" puede estar en cualquiera de los dos extremos, o en ninguno. */
+  const r = s.match(/(\d{1,2})(?:[:.](\d{2}))?\s*(?:hs|h)?\s*(?:[-–—]|a(?=\s*\d))\s*(\d{1,2})(?:[:.](\d{2}))?\s*(?:hs|h)?/i);
+  if (r && Number(r[1]) <= 24 && Number(r[3]) <= 24) {
+    const ini = Number(r[1]) * 60 + Number(r[2] || 0);
+    const fin = Number(r[3]) * 60 + Number(r[4] || 0);
+    let dur = (fin - ini + 1440) % 1440;
+    if (dur === 0) dur = 1440;              // "08-08" es una vuelta completa, no cero
+    return { tipo: "rango", ini: ini, fin: fin, dur: dur };
+  }
+  // Sólo duración, sin reloj: "Apoyo 6hs", "6 h", "12hs".
+  const d = s.match(/(\d{1,2})(?:[:.](\d{2}))?\s*h/i);
+  if (d) return { tipo: "dur", dur: Number(d[1]) * 60 + Number(d[2] || 0) };
+  return { tipo: "nada", dur: 0 };
 }
-function resumenHoras() {
+
+/* Reparto día/noche de un turno. Día = 08:00–20:00, noche = 20:00–08:00, contado por
+   reloj y no por el rol: una guardia cargada como D12 pero con horario "14-20hs" son
+   6 h de día, y un apoyo 16-22 son 4 h de día + 2 h de noche. Un horario sin reloj
+   (ej. "Apoyo 6hs") se cuenta entero como día, como pidió la coordinación. */
+function horasDe(a) {
+  const h = parseHorario(horarioDe(a));
+  if (h.tipo !== "rango") return { dia: h.dur / 60, noche: 0, total: h.dur / 60, conReloj: false };
+  let dia = 0, noche = 0, t = h.ini, restan = h.dur;
+  while (restan > 0) {
+    const tm = ((t % 1440) + 1440) % 1440;
+    const enDia = tm >= DIA_INI_MIN && tm < DIA_FIN_MIN;
+    const limite = enDia ? DIA_FIN_MIN : (tm < DIA_INI_MIN ? DIA_INI_MIN : 1440);
+    const paso = Math.min(restan, limite - tm);
+    if (enDia) dia += paso; else noche += paso;
+    t += paso; restan -= paso;
+  }
+  return { dia: dia / 60, noche: noche / 60, total: h.dur / 60, conReloj: true };
+}
+
+// Clase del turno para las columnas Día / Noche / Apoyo: por horario, no por rol.
+function claseTurno(a, h) {
+  if (!esGuardia(a)) return "apoyo";
+  h = h || horasDe(a);
+  return (h.noche > h.dia) ? "noche" : "dia";
+}
+
+// Horas para mostrar: sin decimal cuando es entero (108 h, no 108.0 h).
+function fmtH(n) {
+  const x = Math.round((Number(n) || 0) * 100) / 100;
+  return (Math.abs(x - Math.round(x)) < 0.005) ? String(Math.round(x)) : x.toFixed(1);
+}
+
+// ─── SELECTOR DE PERÍODO (PDF · Estadísticas · RRHH) ─────────
+/* Un único selector con dos modos, usado por los tres lugares que informan números:
+     mes    → un mes completo
+     rango  → desde/hasta, SÓLO esos días exactos
+   Regla de conteo, la misma en los tres: una guardia cuenta COMPLETA en el día en que
+   EMPIEZA. La nocturna 20-08 que arranca el último día del período entra con sus 12 h;
+   la que arrancó el día anterior al período no entra. Eso sale solo de recorrer los días
+   del período, porque cada turno está guardado en su día de inicio. */
+function perDefecto() { return { modo: "mes", anio: state.anio, mes: state.mes, desde: "", hasta: "" }; }
+
+function perNorm(p) {
+  const q = Object.assign(perDefecto(), p || {});
+  if (q.modo !== "rango") q.modo = "mes";
+  if (q.modo === "rango" && q.desde && q.hasta && q.desde > q.hasta) { const t = q.desde; q.desde = q.hasta; q.hasta = t; }
+  return q;
+}
+function perValido(p) {
+  const q = perNorm(p);
+  return q.modo === "mes" ? true : !!(q.desde && q.hasta);
+}
+function perFmtFecha(iso) {
+  const f = isoADMY(iso);
+  return (f.dia && MESES_CORTO[f.mes]) ? f.dia + " " + MESES_CORTO[f.mes] + " " + f.anio : "";
+}
+function perEtiqueta(p) {
+  const q = perNorm(p);
+  if (q.modo === "mes") return MESES[q.mes] + " " + q.anio;
+  if (!perValido(q)) return "período incompleto";
+  return perFmtFecha(q.desde) + " — " + perFmtFecha(q.hasta);
+}
+// Calendario de un mes: el de pantalla gana (puede tener ediciones sin guardar).
+function perCal(anio, mes) {
+  if (anio === state.anio && mes === state.mes) return state.calendario || {};
+  return calDelMes(anio, mes) || {};
+}
+// Tramos del período, uno por mes: { anio, mes, dIni, dFin }.
+function perMeses(p) {
+  const q = perNorm(p);
+  if (q.modo === "mes") return [{ anio: q.anio, mes: q.mes, dIni: 1, dFin: new Date(q.anio, q.mes + 1, 0).getDate() }];
+  if (!perValido(q)) return [];
+  return segmentosPorMes(q.desde, q.hasta).map(s => ({ anio: s.anio, mes: s.mes, dIni: s.desde, dFin: s.hasta }));
+}
+// Notas de cualquier mes (cargarNotasMes sólo lee el de pantalla).
+function perNotas(anio, mes) {
+  if (state.compartido) return (anio === state.anio && mes === state.mes) ? (state.notasCompartidas || "") : "";
+  try { return localStorage.getItem(notasMesKey(anio, mes)) || ""; } catch (e) { return ""; }
+}
+
+function perFilaVacia(m) {
+  return { medico: m, guardias: 0, dia: 0, noche: 0, apoyo: 0, horas: 0, horasDia: 0, horasNoche: 0 };
+}
+// Agregado de UN tramo de mes. Sólo los días dIni..dFin, y el turno entero en su día de inicio.
+function perAgregarTramo(anio, mes, dIni, dFin) {
+  const cal = perCal(anio, mes);
   const acc = {};
-  const cal = state.calendario || {};
-  Object.keys(cal).forEach(fecha => {
-    (cal[fecha].asignaciones || []).forEach(a => {
-      if (esPendiente(a)) return;   // un turno sin cubrir no suma horas a nadie
+  for (let d = dIni; d <= dFin; d++) {
+    const f = anio + "-" + String(mes + 1).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+    ((cal[f] && cal[f].asignaciones) || []).forEach(a => {
+      if (esPendiente(a)) return;                       // un turno sin cubrir no suma a nadie
       const m = getMedico(a.medicoId); if (!m) return;
-      if (!acc[m.id]) acc[m.id] = { medico: m, guardias: 0, horas: 0 };
-      acc[m.id].guardias += 1;
-      acc[m.id].horas += durationHoras(a);
+      const h = horasDe(a);
+      const x = acc[m.id] || (acc[m.id] = perFilaVacia(m));
+      x.guardias++;
+      x[claseTurno(a, h)]++;
+      x.horas += h.total; x.horasDia += h.dia; x.horasNoche += h.noche;
     });
+  }
+  return acc;
+}
+/* Agregado completo del período. Devuelve el desglose por mes (para las tablas y las
+   gráficas del PDF) y el total del período ya ordenado. `sinDatos` son los meses del
+   período que no tienen calendario guardado: se avisan y no se imprime una hoja vacía. */
+function perAgregar(p) {
+  const q = perNorm(p);
+  const meses = [], sinDatos = [];
+  perMeses(q).forEach(s => {
+    const hayCal = Object.keys(perCal(s.anio, s.mes)).length > 0;
+    if (!hayCal) sinDatos.push({ anio: s.anio, mes: s.mes, etiqueta: MESES[s.mes] + " " + s.anio });
+    meses.push(Object.assign({}, s, {
+      etiqueta: MESES[s.mes] + " " + s.anio,
+      etiquetaCorta: MESES_CORTO[s.mes] + " " + String(s.anio).slice(2),
+      hayCal: hayCal,
+      porMedico: perAgregarTramo(s.anio, s.mes, s.dIni, s.dFin),
+    }));
   });
-  return Object.values(acc)
-    .map(x => ({ ...x, promedio: x.guardias ? (x.horas / x.guardias) : 0 }))
-    .sort((a, b) => b.horas - a.horas);
+  const total = {};
+  const CAMPOS = ["guardias", "dia", "noche", "apoyo", "horas", "horasDia", "horasNoche"];
+  meses.forEach(mm => Object.keys(mm.porMedico).forEach(id => {
+    const x = mm.porMedico[id];
+    const t = total[id] || (total[id] = perFilaVacia(x.medico));
+    CAMPOS.forEach(k => { t[k] += x[k]; });
+  }));
+  const filas = Object.keys(total).map(id => {
+    const x = total[id];
+    return Object.assign({}, x, { promedio: x.guardias ? (x.horas / x.guardias) : 0 });
+  }).sort((a, b) => b.horas - a.horas || a.medico.nombre.localeCompare(b.medico.nombre));
+  return { periodo: q, meses: meses, sinDatos: sinDatos, filas: filas, total: total };
+}
+// Ausencias del período, recortadas a los días del período, agrupadas por mes.
+function perAusencias(p) {
+  return perMeses(p).map(s => {
+    const arr = ausGetMes(s.anio, s.mes)
+      .filter(a => Number(a.hasta) >= s.dIni && Number(a.desde) <= s.dFin)
+      .map(a => Object.assign({}, a, {
+        desdeRec: Math.max(Number(a.desde), s.dIni),
+        hastaRec: Math.min(Number(a.hasta), s.dFin),
+      }))
+      .sort((a, b) => a.desdeRec - b.desdeRec);
+    return { anio: s.anio, mes: s.mes, dIni: s.dIni, dFin: s.dFin, etiqueta: MESES[s.mes] + " " + s.anio, lista: arr };
+  }).filter(x => x.lista.length);
+}
+
+// ─── SELECTOR DE PERÍODO: ESTADO Y RENDER ────────────────────
+/* Tres contextos comparten el mismo componente. Cada uno guarda su propio período para
+   que elegir un rango en el PDF no le cambie el mes a la pestaña de Estadísticas. */
+function perRef(ctx) {
+  if (ctx === "pdf") {
+    if (!state.modalPDF) return perDefecto();
+    if (!state.modalPDF.periodo) state.modalPDF.periodo = perDefecto();
+    return state.modalPDF.periodo;
+  }
+  if (ctx === "rrhh") {
+    if (!state.reporteRRHH) return perDefecto();
+    if (!state.reporteRRHH.periodo) state.reporteRRHH.periodo = perDefecto();
+    return state.reporteRRHH.periodo;
+  }
+  if (!state.statsPeriodo) state.statsPeriodo = perDefecto();
+  return state.statsPeriodo;
+}
+function perSet(ctx, campo, valor) {
+  const p = perRef(ctx);
+  if (campo === "modo") {
+    p.modo = (valor === "rango") ? "rango" : "mes";
+    // Al pasar a rango se siembra con el mes elegido: así "desde/hasta" nunca arranca vacío.
+    if (p.modo === "rango" && (!p.desde || !p.hasta)) {
+      const total = new Date(p.anio, p.mes + 1, 0).getDate();
+      const mm = String(p.mes + 1).padStart(2, "0");
+      p.desde = p.anio + "-" + mm + "-01";
+      p.hasta = p.anio + "-" + mm + "-" + String(total).padStart(2, "0");
+    }
+  } else if (campo === "mes") p.mes = Math.max(0, Math.min(11, Number(valor) || 0));
+  else if (campo === "anio") p.anio = Math.max(2000, Math.min(2100, Number(valor) || state.anio));
+  else if (campo === "desde" || campo === "hasta") p[campo] = String(valor || "");
+  if (ctx === "rrhh" && state.reporteRRHH) rrhhRecalcular();
+  render();
+}
+// Años ofrecidos: el del período, el de pantalla y dos para cada lado.
+function perAnios(p) {
+  const base = [p.anio, state.anio, new Date().getFullYear()];
+  const out = {};
+  base.forEach(a => { for (let k = -2; k <= 1; k++) out[a + k] = true; });
+  return Object.keys(out).map(Number).sort((a, b) => a - b);
+}
+function renderSelectorPeriodo(ctx, opts) {
+  const o = opts || {};
+  const p = perNorm(perRef(ctx));
+  const esMes = p.modo === "mes";
+  const btn = (modo, txt) => '<button type="button" onclick="perSet(\'' + ctx + '\',\'modo\',\'' + modo + '\')"' +
+    ' style="flex:0 0 auto;padding:5px 11px;border:1px solid ' + (p.modo === modo ? "#2563eb" : "#d1d5db") + ';' +
+    'background:' + (p.modo === modo ? "#eff6ff" : "#fff") + ';color:' + (p.modo === modo ? "#1d4ed8" : "#374151") + ';' +
+    'font-weight:' + (p.modo === modo ? "700" : "600") + ';font-size:0.74rem;border-radius:6px;cursor:pointer">' + txt + '</button>';
+  const campos = esMes
+    ? '<select class="filtro-select" onchange="perSet(\'' + ctx + '\',\'mes\',this.value)" aria-label="Mes">' +
+      MESES.map((n, i) => '<option value="' + i + '"' + (i === p.mes ? " selected" : "") + '>' + n + '</option>').join("") +
+      '</select>' +
+      '<select class="filtro-select" onchange="perSet(\'' + ctx + '\',\'anio\',this.value)" aria-label="Año">' +
+      perAnios(p).map(a => '<option value="' + a + '"' + (a === p.anio ? " selected" : "") + '>' + a + '</option>').join("") +
+      '</select>'
+    : '<label style="font-size:0.72rem;color:#6b7280;font-weight:600">Desde' +
+      '<input type="date" class="filtro-select" value="' + escAttr(p.desde) + '" onchange="perSet(\'' + ctx + '\',\'desde\',this.value)" style="margin-left:4px"></label>' +
+      '<label style="font-size:0.72rem;color:#6b7280;font-weight:600">Hasta' +
+      '<input type="date" class="filtro-select" value="' + escAttr(p.hasta) + '" onchange="perSet(\'' + ctx + '\',\'hasta\',this.value)" style="margin-left:4px"></label>';
+  const ag = perValido(p) ? perAgregar(p) : null;
+  const aviso = (ag && ag.sinDatos.length)
+    ? '<div style="margin-top:7px;font-size:0.72rem;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:6px 9px;line-height:1.45">' +
+      '⚠️ Sin guardias cargadas en ' + (ag.sinDatos.length === 1 ? "el mes de" : "los meses de") + ' <b>' +
+      ag.sinDatos.map(x => escHTML(x.etiqueta)).join(", ") + '</b>. ' +
+      (ag.sinDatos.length === 1 ? "Ese mes no se incluye" : "Esos meses no se incluyen") + ' en el informe.</div>'
+    : "";
+  const invalido = !perValido(p)
+    ? '<div style="margin-top:7px;font-size:0.72rem;color:#b91c1c;font-weight:600">Completá las dos fechas del rango.</div>'
+    : "";
+  return '<div style="border:1px solid #e5e7eb;background:#f8fafc;border-radius:8px;padding:9px 11px;' + (o.margen || "margin-bottom:12px") + '">' +
+    '<div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">' +
+    '<span style="font-size:0.68rem;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.6px;margin-right:2px">Período</span>' +
+    btn("mes", "Mes completo") + btn("rango", "Rango de días") +
+    '<span style="width:1px;height:18px;background:#d1d5db;margin:0 3px"></span>' +
+    campos + '</div>' + invalido + aviso + '</div>';
+}
+
+// ─── MEJORA 9: HORAS POR MÉDICO ──────────────────────────────
+/* Horas totales de un turno. Queda sólo como atajo: el cálculo vive en horasDe(), que
+   es también quien reparte día y noche. Dos fórmulas para lo mismo es cómo el informe
+   empieza a decir algo distinto que la pantalla. */
+function durationHoras(a) { return horasDe(a).total; }
+/* Resumen de horas del mes en pantalla. Delega en el agregador del período para que la
+   pantalla, el PDF y el reporte de RRHH cuenten con las mismas reglas. */
+function resumenHoras() {
+  return perAgregar({ modo: "mes", anio: state.anio, mes: state.mes }).filas;
 }
 
 // ─── MEJORA 8: VISTA SEMANAL ─────────────────────────────────
@@ -3274,7 +3486,9 @@ function togglePDFOpt(k) {
 function confirmarExportarPDF() {
   const o = state.modalPDF;
   if (!o || !algoElegidoPDF(o)) return;   // el botón ya está deshabilitado
-  const opciones = { ...o };
+  const per = perNorm(perRef("pdf"));
+  if (!perValido(per)) return;
+  const opciones = Object.assign({}, o, { periodo: per });
   state.modalPDF = null;
   render();
   exportarPDF(opciones);
@@ -3283,45 +3497,46 @@ function algoElegidoPDF(o) { return !!(o.planilla || o.horas || o.notas || o.aus
 function renderModalPDF() {
   if (!state.modalPDF) return "";
   const o = state.modalPDF;
-  const hayNotas = !!cargarNotasMes().trim();
-  const hayHoras = resumenHoras().length > 0;
-  const hayAus = ausGet().length > 0;
+  const per = perRef("pdf");
+  const ok = perValido(per);
+  const ag = ok ? perAgregar(per) : { filas: [], meses: [], sinDatos: [] };
+  const hayNotas = ag.meses.some(m => perNotas(m.anio, m.mes).trim() !== "");
+  const hayHoras = ag.filas.length > 0;
+  const hayAus = ok && perAusencias(per).length > 0;
   const hayHist = eventosIntercambioMes().length > 0;
   const nada = !algoElegidoPDF(o);
-  const fila = (k, label, extra, disponible) => `
-    <label style="display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid ${o[k] ? "#2563eb" : "#d1d5db"};background:${o[k] ? "#eff6ff" : "#fff"};border-radius:7px;margin-bottom:8px;cursor:${disponible ? "pointer" : "not-allowed"};opacity:${disponible ? 1 : .55}">
-      <input type="checkbox" ${o[k] ? "checked" : ""} ${disponible ? "" : "disabled"} onchange="togglePDFOpt('${k}')"
-        style="width:17px;height:17px;accent-color:#2563eb;cursor:${disponible ? "pointer" : "not-allowed"}">
-      <span style="flex:1">
-        <span style="font-size:0.85rem;font-weight:600;color:#111827">${label}</span>
-        ${extra ? `<span style="display:block;font-size:0.7rem;color:#6b7280;margin-top:1px">${extra}</span>` : ""}
-      </span>
-    </label>`;
+  const fila = (k, label, extra, disponible) => '<label style="display:flex;align-items:center;gap:9px;padding:9px 10px;border:1px solid ' +
+    (o[k] ? "#2563eb" : "#d1d5db") + ';background:' + (o[k] ? "#eff6ff" : "#fff") + ';border-radius:7px;margin-bottom:8px;cursor:' +
+    (disponible ? "pointer" : "not-allowed") + ';opacity:' + (disponible ? 1 : .55) + '">' +
+    '<input type="checkbox"' + (o[k] ? " checked" : "") + (disponible ? "" : " disabled") + ' onchange="togglePDFOpt(\'' + k + '\')"' +
+    ' style="width:17px;height:17px;accent-color:#2563eb;cursor:' + (disponible ? "pointer" : "not-allowed") + '">' +
+    '<span style="flex:1"><span style="font-size:0.85rem;font-weight:600;color:#111827">' + label + '</span>' +
+    (extra ? '<span style="display:block;font-size:0.7rem;color:#6b7280;margin-top:1px">' + extra + '</span>' : "") +
+    '</span></label>';
 
-  return `<div class="modal-bg" onclick="if(event.target===this)cerrarModalPDF()">
-    <div class="modal-box modal-scroll" style="max-width:430px">
-      <div class="modal-scroll-head">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-          <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">📄 Exportar PDF — ${MESES[state.mes]} ${state.anio}</div>
-          <button onclick="cerrarModalPDF()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
-        </div>
-        <div style="font-size:0.73rem;color:#6b7280;margin-bottom:12px">Elegí qué secciones incluir en el informe.</div>
-      </div>
-      <div class="modal-scroll-body">
-      ${fila("planilla", "Planilla de guardias", "Calendario mensual completo", true)}
-      ${fila("horas", "Resumen de horas por médico", hayHoras ? "Guardias, horas totales y promedio" : "Sin guardias cargadas este mes", hayHoras)}
-      ${fila("notas", "Notas del mes", hayNotas ? "Texto del panel 📝 Notas del mes" : "No hay notas escritas este mes", hayNotas)}
-      ${fila("ausencias", "Licencias y ausencias del mes", hayAus ? "Médico, tipo, período y motivo" : "Sin ausencias registradas este mes", hayAus)}
-      ${fila("historial", "Historial de intercambios y movimientos", hayHist ? "Permutas y traslados de guardia del mes" : "Sin intercambios registrados este mes", hayHist)}
-      ${nada ? `<div style="font-size:0.72rem;color:#b91c1c;font-weight:600;margin-bottom:10px">Elegí al menos una sección para poder exportar.</div>` : ""}
-      </div>
-      <div class="modal-scroll-foot" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <button class="btn btn-primary" ${nada ? "disabled" : ""} onclick="confirmarExportarPDF()"
-          style="${nada ? "opacity:.45;cursor:not-allowed" : ""}">📄 Generar PDF</button>
-        <button class="btn btn-secondary" onclick="cerrarModalPDF()">Cancelar</button>
-      </div>
-    </div>
-  </div>`;
+  return '<div class="modal-bg" onclick="if(event.target===this)cerrarModalPDF()">' +
+    '<div class="modal-box modal-scroll" style="max-width:470px">' +
+      '<div class="modal-scroll-head">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">' +
+          '<div style="font-family:Georgia,serif;font-size:1rem;color:#111827">📄 Exportar PDF — ' + escHTML(perEtiqueta(per)) + '</div>' +
+          '<button onclick="cerrarModalPDF()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>' +
+        '</div>' +
+        '<div style="font-size:0.73rem;color:#6b7280;margin-bottom:10px">Elegí el período y qué secciones incluir en el informe.</div>' +
+      '</div>' +
+      '<div class="modal-scroll-body">' +
+        renderSelectorPeriodo("pdf") +
+        fila("planilla", "Planilla de guardias", "Calendario, una hoja por mes", true) +
+        fila("horas", "Horas por médico", hayHoras ? "Guardias, horas totales y promedio" : "Sin guardias cargadas en el período", hayHoras) +
+        fila("notas", "Notas del mes", hayNotas ? "Texto del panel 📝 Notas del mes" : "No hay notas escritas en el período", hayNotas) +
+        fila("ausencias", "Licencias y ausencias", hayAus ? "Médico, tipo, período y motivo" : "Sin ausencias registradas en el período", hayAus) +
+        fila("historial", "Historial de intercambios y movimientos", hayHist ? "Permutas y traslados de guardia" : "Sin intercambios registrados", hayHist) +
+        (nada ? '<div style="font-size:0.72rem;color:#b91c1c;font-weight:600;margin-bottom:10px">Elegí al menos una sección para poder exportar.</div>' : "") +
+      '</div>' +
+      '<div class="modal-scroll-foot" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+        '<button class="btn btn-primary"' + ((nada || !ok) ? " disabled" : "") + ' onclick="confirmarExportarPDF()" style="' + ((nada || !ok) ? "opacity:.45;cursor:not-allowed" : "") + '">📄 Generar PDF</button>' +
+        '<button class="btn btn-secondary" onclick="cerrarModalPDF()">Cancelar</button>' +
+      '</div>' +
+    '</div></div>';
 }
 
 function exportarPDF(opciones) {
@@ -3670,34 +3885,33 @@ function renderModalResumen() {
 // ─── REPORTE PARA RRHH (PDF vertical) ────────────────────────
 // Una fila por médico del equipo, incluidos los que no tienen guardias en el mes:
 // RRHH necesita ver el cero explícito, no una ausencia de fila.
-function datosReporteRRHH() {
+function datosReporteRRHH(p) {
+  const per = perNorm(p || perRef("rrhh"));
+  const ag = perAgregar(per);
   const acc = {};
   medicos.forEach(m => {
-    acc[m.id] = { medico: m, diurnas: 0, nocturnas: 0, apoyos: 0, horas: 0, licencia: 0, solicitud: 0, enfermedad: 0, otro: 0 };
+    acc[m.id] = { medico: m, guardias: 0, diurnas: 0, nocturnas: 0, apoyos: 0, horas: 0, horasDia: 0, horasNoche: 0,
+                  licencia: 0, solicitud: 0, enfermedad: 0, otro: 0 };
   });
-  Object.keys(state.calendario || {}).forEach(f => {
-    (state.calendario[f].asignaciones || []).forEach(a => {
-      if (esPendiente(a)) return;              // los turnos sin cubrir no se le imputan a nadie
-      const fila = acc[Number(a.medicoId)];
-      if (!fila) return;
-      if (a.rol === "D12") fila.diurnas++;
-      else if (a.rol === "N12") fila.nocturnas++;
-      else fila.apoyos++;
-      fila.horas += durationHoras(a);
-    });
+  ag.filas.forEach(x => {
+    const fila = acc[x.medico.id];
+    if (!fila) return;
+    fila.guardias = x.guardias;
+    fila.diurnas = x.dia; fila.nocturnas = x.noche; fila.apoyos = x.apoyo;
+    fila.horas = x.horas; fila.horasDia = x.horasDia; fila.horasNoche = x.horasNoche;
   });
-  // Días de ausencia dentro del mes en pantalla (los segmentos ya vienen recortados al mes).
-  ausGet().forEach(a => {
+  /* Días de ausencia recortados al período: una licencia que cruza el borde aporta sólo
+     los días que caen adentro. Antes se sumaba el segmento entero del mes en pantalla. */
+  perAusencias(per).forEach(g => g.lista.forEach(a => {
     const fila = acc[Number(a.medicoId)];
     if (!fila) return;
-    const dias = Math.max(0, (Number(a.hasta) || 0) - (Number(a.desde) || 0) + 1);
+    const dias = Math.max(0, Number(a.hastaRec) - Number(a.desdeRec) + 1);
     if (a.tipo === "licencia") fila.licencia += dias;
     else if (a.tipo === "solicitud") fila.solicitud += dias;
     else if (a.tipo === "enfermedad") fila.enfermedad += dias;
     else fila.otro += dias;
-  });
-  return Object.values(acc)
-    .map(x => ({ ...x, observaciones: observacionAuto(x) }))
+  }));
+  return Object.keys(acc).map(k => Object.assign({}, acc[k], { observaciones: observacionAuto(acc[k]) }))
     .sort((x, y) => y.horas - x.horas || x.medico.nombre.localeCompare(y.medico.nombre));
 }
 // Observación sugerida (el jefe puede sobrescribirla en la previsualización).
@@ -3713,8 +3927,17 @@ function observacionAuto(x) {
 // Las ediciones viven solo en state.reporteRRHH (memoria): no pasan por guardarEstado()
 // ni por localStorage, así que se pierden al cerrar. Son para esa impresión y nada más.
 function abrirReporteRRHH() {
-  state.reporteRRHH = { filas: datosReporteRRHH() };
+  const per = perDefecto();
+  state.reporteRRHH = { periodo: per, filas: datosReporteRRHH(per) };
   render();
+}
+/* Al cambiar el período se recalculan las filas. Las correcciones a mano de horas y
+   observaciones se pierden a propósito: eran de otro período. */
+function rrhhRecalcular() {
+  if (!state.reporteRRHH) return;
+  const per = perNorm(state.reporteRRHH.periodo);
+  state.reporteRRHH.periodo = per;
+  state.reporteRRHH.filas = perValido(per) ? datosReporteRRHH(per) : [];
 }
 function cerrarReporteRRHH() { state.reporteRRHH = null; render(); }
 function rrhhSetHoras(i, v) {
@@ -3722,7 +3945,7 @@ function rrhhSetHoras(i, v) {
   if (!f) return;
   f.horas = Math.max(0, Number(v) || 0);
   const el = document.getElementById("rrhh-total-horas");
-  if (el) el.textContent = state.reporteRRHH.filas.reduce((t, x) => t + (Number(x.horas) || 0), 0);
+  if (el) el.textContent = fmtH(state.reporteRRHH.filas.reduce((t, x) => t + (Number(x.horas) || 0), 0));
 }
 function rrhhSetObs(i, v) {
   const f = state.reporteRRHH && state.reporteRRHH.filas[i];
@@ -3730,7 +3953,9 @@ function rrhhSetObs(i, v) {
 }
 function renderReporteRRHH() {
   if (!state.reporteRRHH) return "";
-  const filas = state.reporteRRHH.filas;
+  const per = perRef("rrhh");
+  const ok = perValido(per);
+  const filas = state.reporteRRHH.filas || [];
   const editable = !!state.jefe;
   const tot = filas.reduce((t, x) => ({
     diurnas: t.diurnas + x.diurnas, nocturnas: t.nocturnas + x.nocturnas, apoyos: t.apoyos + x.apoyos,
@@ -3743,8 +3968,8 @@ function renderReporteRRHH() {
     <td class="rr-num">${x.nocturnas}</td>
     <td class="rr-num">${x.apoyos}</td>
     <td class="rr-edit">${editable
-      ? `<input type="number" min="0" step="1" value="${Number(x.horas) || 0}" oninput="rrhhSetHoras(${i},this.value)">`
-      : `<span>${Number(x.horas) || 0}</span>`}</td>
+      ? `<input type="number" min="0" step="0.5" value="${fmtH(x.horas)}" oninput="rrhhSetHoras(${i},this.value)">`
+      : `<span>${fmtH(x.horas)}</span>`}</td>
     <td class="rr-num">${x.licencia}</td>
     <td class="rr-num">${x.solicitud}</td>
     <td class="rr-edit">${editable
@@ -3756,21 +3981,22 @@ function renderReporteRRHH() {
     <div class="modal-box modal-scroll" style="max-width:940px">
       <div class="modal-scroll-head">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-          <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">📋 Reporte RRHH — ${MESES[state.mes]} ${state.anio}</div>
+          <div style="font-family:Georgia,serif;font-size:1rem;color:#111827">📋 Reporte RRHH — ${escHTML(perEtiqueta(per))}</div>
           <button onclick="cerrarReporteRRHH()" style="background:transparent;border:none;font-size:1.2rem;cursor:pointer;color:#6b7280">✕</button>
         </div>
         <div style="font-size:0.73rem;color:#6b7280;margin-bottom:12px">
           ${editable
-            ? "Revisá los datos antes de imprimir. <strong>Horas totales</strong> y <strong>Observaciones</strong> se pueden corregir a mano; el resto se calcula solo. Las correcciones valen únicamente para este PDF, no se guardan."
+            ? "Revisá los datos antes de imprimir. <strong>Horas totales</strong> y <strong>Observaciones</strong> se pueden corregir a mano; el resto se calcula solo. Las correcciones valen únicamente para este PDF, no se guardan, y se recalculan si cambiás el período."
             : "Vista de solo lectura."}
         </div>
       </div>
       <div class="modal-scroll-body">
+        ${renderSelectorPeriodo("rrhh")}
         <div style="overflow-x:auto">
           <table class="rr-tabla">
             <thead><tr>
               <th style="text-align:left">Médico</th>
-              <th>G. Diurnas</th><th>G. Nocturnas</th><th>Apoyos</th>
+              <th>G. Día</th><th>G. Noche</th><th>Apoyos</th>
               <th class="rr-th-edit">Horas totales ✎</th>
               <th>Licencias (días)</th><th>Días pedidos</th>
               <th class="rr-th-edit" style="text-align:left">Observaciones ✎</th>
@@ -3781,7 +4007,7 @@ function renderReporteRRHH() {
               <td class="rr-num">${tot.diurnas}</td>
               <td class="rr-num">${tot.nocturnas}</td>
               <td class="rr-num">${tot.apoyos}</td>
-              <td class="rr-num" id="rrhh-total-horas">${tot.horas}</td>
+              <td class="rr-num" id="rrhh-total-horas">${fmtH(tot.horas)}</td>
               <td class="rr-num">${tot.licencia}</td>
               <td class="rr-num">${tot.solicitud}</td>
               <td></td>
@@ -3790,23 +4016,27 @@ function renderReporteRRHH() {
         </div>
       </div>
       <div class="modal-scroll-foot" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <button class="btn btn-primary" onclick="generarPDFReporteRRHH()">📄 Generar PDF</button>
+        <button class="btn btn-primary" ${ok ? "" : "disabled"} onclick="generarPDFReporteRRHH()" ${ok ? "" : 'style="opacity:.45;cursor:not-allowed"'}>📄 Generar PDF</button>
         <button class="btn btn-secondary" onclick="cerrarReporteRRHH()">Cancelar</button>
       </div>
     </div>
   </div>`;
 }
 function generarPDFReporteRRHH() {
-  const filas = state.reporteRRHH ? state.reporteRRHH.filas : null;
+  if (!state.reporteRRHH) return;
+  const per = perNorm(state.reporteRRHH.periodo);
+  if (!perValido(per)) return;
+  const filas = state.reporteRRHH.filas;
   state.reporteRRHH = null;
   render();
-  exportarReporteRRHH(filas);   // se imprime con los valores editados
+  exportarReporteRRHH(filas, per);   // se imprime con los valores editados
 }
 
-function exportarReporteRRHH(filasEditadas) {
+function exportarReporteRRHH(filasEditadas, periodo) {
   const cfg = state.config || {};
   const logo = cargarLogo();
-  const filas = (filasEditadas && filasEditadas.length) ? filasEditadas : datosReporteRRHH();
+  const per = perNorm(periodo || perDefecto());
+  const filas = (filasEditadas && filasEditadas.length) ? filasEditadas : datosReporteRRHH(per);
   const tot = filas.reduce((t, x) => ({
     diurnas: t.diurnas + x.diurnas, nocturnas: t.nocturnas + x.nocturnas, apoyos: t.apoyos + x.apoyos,
     horas: t.horas + (Number(x.horas) || 0), licencia: t.licencia + x.licencia, solicitud: t.solicitud + x.solicitud,
@@ -3817,7 +4047,7 @@ function exportarReporteRRHH(filasEditadas) {
     <td class="num">${x.diurnas}</td>
     <td class="num">${x.nocturnas}</td>
     <td class="num">${x.apoyos}</td>
-    <td class="num fuerte">${Number(x.horas) || 0}</td>
+    <td class="num fuerte">${fmtH(x.horas)}</td>
     <td class="num">${x.licencia}</td>
     <td class="num">${x.solicitud}</td>
     <td class="obs">${escHTML(x.observaciones || observacionAuto(x))}</td>
@@ -3827,7 +4057,7 @@ function exportarReporteRRHH(filasEditadas) {
   const emision = hoy.toLocaleDateString("es") + " " + hoy.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
 
   const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">
-<title>Reporte RRHH ${MESES[state.mes]} ${state.anio}</title>
+<title>Reporte RRHH ${perEtiqueta(per)}</title>
 <style>
   @page { size: 210mm 297mm; margin: 15mm 12mm; }   /* A4 vertical */
   * { box-sizing:border-box; margin:0; padding:0; }
@@ -3857,7 +4087,7 @@ function exportarReporteRRHH(filasEditadas) {
     ${logo ? `<img src="${escAttr(logo)}" alt="">` : ""}
     ${cfg.institucion ? `<div style="font-size:9.5pt;color:#6b7280;font-weight:600">${escHTML(cfg.institucion)}</div>` : ""}
     ${cfg.servicio ? `<div class="serv">${escHTML(cfg.servicio)}</div>` : ""}
-    <div class="tit">REPORTE DE GUARDIAS — ${MESES[state.mes].toUpperCase()} ${state.anio}</div>
+    <div class="tit">REPORTE DE GUARDIAS — ${escHTML(perEtiqueta(per).toUpperCase())}</div>
     <div class="coord">Coordinador: ${escHTML(cfg.coordinador || "—")}</div>
     <div class="linea"></div>
   </div>
@@ -3875,7 +4105,7 @@ function exportarReporteRRHH(filasEditadas) {
       <td class="num">${tot.diurnas}</td>
       <td class="num">${tot.nocturnas}</td>
       <td class="num">${tot.apoyos}</td>
-      <td class="num">${tot.horas}</td>
+      <td class="num">${fmtH(tot.horas)}</td>
       <td class="num">${tot.licencia}</td>
       <td class="num">${tot.solicitud}</td>
       <td></td>
