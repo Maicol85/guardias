@@ -377,6 +377,7 @@ function cargarNotasMes() {
 }
 function guardarNotasMes(texto) {
   if (state.compartido) return;
+  if (mesCerrado(state.anio, state.mes)) return;   // el textarea ya va readonly; esto es la red de abajo
   try { localStorage.setItem(notasMesKey(state.anio, state.mes), texto); }
   catch(e) {}
 }
@@ -1147,7 +1148,15 @@ const DOW_NOMBRE = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","
 
 // Calendario de un mes: primero el que está en memoria, si no el guardado en localStorage.
 function calDelMes(anio, mes) {
-  return state.historialMeses[`${anio}-${mes}`] || cargarCalMes(anio, mes) || {};
+  const enMemoria = state.historialMeses[`${anio}-${mes}`];
+  if (enMemoria) return enMemoria;
+  const confirmado = cargarCalMes(anio, mes);
+  if (confirmado) return confirmado;
+  /* Un mes que todavía sólo existe como borrador NO es un mes vacío. Sin esta línea, el PDF o
+     las estadísticas de un período que lo incluye salían en blanco y el único aviso era el de
+     "mes sin datos", que acá miente. El borrador nunca reemplaza a lo confirmado: se usa sólo
+     cuando no hay nada confirmado, igual que al abrir el mes. */
+  return borradorLeer(anio, mes) || {};
 }
 
 // Extrae de un calendario el "molde" de cada día de semana: para cada día de semana se toma
@@ -3328,6 +3337,17 @@ function ausGetMes(anio, mes) {
 function ausSaveMes(anio, mes, arr) { try { localStorage.setItem(ausKey(anio, mes), JSON.stringify(arr)); } catch (e) {} }
 function ausGet() { return ausGetMes(state.anio, state.mes); }
 function ausSave(arr) { ausSaveMes(state.anio, state.mes, arr); }
+/* Las ausencias de un mes son parte del mes: con el candado cerrado no se tocan. Se comprueba
+   ANTES de escribir ningún segmento, porque una licencia que cruza de mes se guarda mes por mes
+   y dejar la mitad escrita es peor que no escribir nada. */
+function exigirMesesAbiertos(segs, accion) {
+  const cerrados = (segs || []).filter(x => mesCerrado(x.anio, x.mes)).map(x => etiquetaMes(x.anio, x.mes));
+  if (!cerrados.length) return true;
+  alert("🔒 " + cerrados.join(" y ") + (cerrados.length > 1 ? " están cerrados" : " está cerrado") +
+    ", así que " + accion + " no se puede hacer.\n\nAbrí el candado de " +
+    (cerrados.length > 1 ? "esos meses" : "ese mes") + " y volvé a intentarlo.");
+  return false;
+}
 
 // ─── AUSENCIAS QUE CRUZAN MESES ──────────────────────────────
 // Las ausencias se guardan por mes (una clave de localStorage por mes), así que un rango
@@ -3397,6 +3417,7 @@ function guardarAusencia() {
   if (f.fDesde > f.fHasta) { alert("La fecha de fin no puede ser anterior a la de inicio."); return; }
 
   const segs = segmentosPorMes(f.fDesde, f.fHasta);
+  if (!exigirMesesAbiertos(segs, "registrar la ausencia")) return;
   const grupoId = Date.now();
   const motivo = (f.motivo || "").trim();
   segs.forEach((s, i) => {
@@ -3420,6 +3441,10 @@ function guardarAusencia() {
 function borrarAusencia(id) {
   const aus = ausGet().find(a => a.id === id);
   if (!aus) return;
+  const segsAus = (aus.grupoId && aus.fDesde && aus.fHasta)
+    ? segmentosPorMes(aus.fDesde, aus.fHasta)
+    : [{ anio: state.anio, mes: state.mes }];
+  if (!exigirMesesAbiertos(segsAus, "borrar la ausencia")) return;
   if (aus.grupoId && aus.fDesde && aus.fHasta) {
     segmentosPorMes(aus.fDesde, aus.fHasta).forEach(s => {
       ausSaveMes(s.anio, s.mes, ausGetMes(s.anio, s.mes).filter(x => x.grupoId !== aus.grupoId));
